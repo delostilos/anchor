@@ -12,7 +12,7 @@
 -- order to avoid unnecessary temporal duplicates.
 --
 ~*/
-var anchor, attribute;
+var anchor, attribute, encryptionGroup;
 while (anchor = schema.nextAnchor()) {
     while(attribute = anchor.nextAttribute()) {
         var statementTypes = "'N'";
@@ -32,7 +32,21 @@ BEGIN
     SET NOCOUNT ON;
     DECLARE @maxVersion int;
     DECLARE @currentVersion int;
-
+~*/
+        if(encryptionGroup = attribute.getEncryptionGroup()) {
+/*~
+    IF NOT EXISTS (
+        SELECT * FROM sys.openkeys 
+        WHERE [key_name] = '$encryptionGroup' AND [database_id] = DB_ID()
+    ) AND EXISTS (
+        SELECT TOP 1 $attribute.anchorReferenceName FROM inserted
+    )
+    BEGIN
+        RAISERROR('The key [$encryptionGroup] must be open in order to modify the attribute ${attribute.name}$.', 16, 1);
+    END    
+~*/
+        }
+/*~    
     DECLARE @$attribute.name TABLE (
         $attribute.anchorReferenceName $anchor.identity not null,
         $(attribute.isEquivalent())? $attribute.equivalentColumnName $schema.metadata.equivalentRange not null,
@@ -100,12 +114,39 @@ BEGIN
 ~*/
         if(attribute.isHistorized()) {
 /*~
-                    WHEN [$attribute.capsule].[rf$attribute.name](
-                        v.$attribute.anchorReferenceName,
-                        $(attribute.isEquivalent())? v.$attribute.equivalentColumnName,
-                        $(attribute.hasChecksum())? v.$attribute.checksumColumnName, : v.$attribute.valueColumnName,
-                        v.$attribute.changingColumnName
-                    ) = 1
+                    WHEN EXISTS ( -- note that this code is identical to the scalar function [$attribute.capsule].[rf$attribute.name]
+                        SELECT TOP 1
+                            42 
+                        WHERE
+                            $(attribute.hasChecksum())? v.$attribute.checksumColumnName = ( : v.$attribute.valueColumnName = (
+                                SELECT TOP 1
+                                    $(attribute.hasChecksum())? pre.$attribute.checksumColumnName : pre.$attribute.valueColumnName
+                                FROM
+                                    $(attribute.isEquivalent())? [$attribute.capsule].[e$attribute.name](v.$attribute.equivalentColumnName) pre : [$attribute.capsule].[$attribute.name] pre
+                                WHERE
+                                    pre.$attribute.anchorReferenceName = v.$attribute.anchorReferenceName
+                                AND
+                                    pre.$attribute.changingColumnName < v.$attribute.changingColumnName
+                                ORDER BY
+                                    pre.$attribute.changingColumnName DESC
+                            )
+                    ) OR EXISTS (
+                        SELECT TOP 1
+                            42 
+                        WHERE
+                            $(attribute.hasChecksum())? v.$attribute.checksumColumnName = ( : v.$attribute.valueColumnName = (
+                                SELECT TOP 1
+                                    $(attribute.hasChecksum())? fol.$attribute.checksumColumnName : fol.$attribute.valueColumnName
+                                FROM
+                                    $(attribute.isEquivalent())? [$attribute.capsule].[e$attribute.name](v.$attribute.equivalentColumnName) fol : [$attribute.capsule].[$attribute.name] fol
+                                WHERE
+                                    fol.$attribute.anchorReferenceName = v.$attribute.anchorReferenceName
+                                AND
+                                    fol.$attribute.changingColumnName > v.$attribute.changingColumnName
+                                ORDER BY
+                                    fol.$attribute.changingColumnName ASC
+                            )
+                    )                    
                     THEN 'R' -- restatement
 ~*/
         }

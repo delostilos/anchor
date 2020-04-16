@@ -101,7 +101,8 @@ SELECT
    Nodeset.anchor.value('@descriptor', 'nvarchar(max)') as [descriptor],
    Nodeset.anchor.value('@identity', 'nvarchar(max)') as [identity],
    Nodeset.anchor.value('metadata[1]/@generator', 'nvarchar(max)') as [generator],
-   Nodeset.anchor.value('count(attribute)', 'int') as [numberOfAttributes]
+   Nodeset.anchor.value('count(attribute)', 'int') as [numberOfAttributes],
+   Nodeset.anchor.value('description[1]/.', 'nvarchar(max)') as [description]
 FROM
    [$schema.metadata.encapsulation].[_Schema] S
 CROSS APPLY
@@ -127,7 +128,8 @@ SELECT
    Nodeset.knot.value('metadata[1]/@generator', 'nvarchar(max)') as [generator],
    Nodeset.knot.value('@dataRange', 'nvarchar(max)') as [dataRange],
    isnull(Nodeset.knot.value('metadata[1]/@checksum', 'nvarchar(max)'), 'false') as [checksum],
-   isnull(Nodeset.knot.value('metadata[1]/@equivalent', 'nvarchar(max)'), 'false') as [equivalent]
+   isnull(Nodeset.knot.value('metadata[1]/@equivalent', 'nvarchar(max)'), 'false') as [equivalent],
+   Nodeset.knot.value('description[1]/.', 'nvarchar(max)') as [description]
 FROM
    [$schema.metadata.encapsulation].[_Schema] S
 CROSS APPLY
@@ -156,6 +158,7 @@ SELECT
    isnull(Nodeset.attribute.value('metadata[1]/@equivalent', 'nvarchar(max)'), 'false') as [equivalent],
    Nodeset.attribute.value('metadata[1]/@generator', 'nvarchar(max)') as [generator],
    Nodeset.attribute.value('metadata[1]/@assertive', 'nvarchar(max)') as [assertive],
+   Nodeset.attribute.value('metadata[1]/@privacy', 'nvarchar(max)') as [privacy],
    isnull(Nodeset.attribute.value('metadata[1]/@checksum', 'nvarchar(max)'), 'false') as [checksum],
    Nodeset.attribute.value('metadata[1]/@restatable', 'nvarchar(max)') as [restatable],
    Nodeset.attribute.value('metadata[1]/@idempotent', 'nvarchar(max)') as [idempotent],
@@ -164,7 +167,10 @@ SELECT
    ParentNodeset.anchor.value('@identity', 'nvarchar(max)') as [anchorIdentity],
    Nodeset.attribute.value('@dataRange', 'nvarchar(max)') as [dataRange],
    Nodeset.attribute.value('@knotRange', 'nvarchar(max)') as [knotRange],
-   Nodeset.attribute.value('@timeRange', 'nvarchar(max)') as [timeRange]
+   Nodeset.attribute.value('@timeRange', 'nvarchar(max)') as [timeRange],
+   Nodeset.attribute.value('metadata[1]/@deletable', 'nvarchar(max)') as [deletable],
+   Nodeset.attribute.value('metadata[1]/@encryptionGroup', 'nvarchar(max)') as [encryptionGroup],
+   Nodeset.attribute.value('description[1]/.', 'nvarchar(max)') as [description]
 FROM
    [$schema.metadata.encapsulation].[_Schema] S
 CROSS APPLY
@@ -213,12 +219,64 @@ SELECT
    Nodeset.tie.value('metadata[1]/@generator', 'nvarchar(max)') as [generator],
    Nodeset.tie.value('metadata[1]/@assertive', 'nvarchar(max)') as [assertive],
    Nodeset.tie.value('metadata[1]/@restatable', 'nvarchar(max)') as [restatable],
-   Nodeset.tie.value('metadata[1]/@idempotent', 'nvarchar(max)') as [idempotent]
+   Nodeset.tie.value('metadata[1]/@idempotent', 'nvarchar(max)') as [idempotent],
+   Nodeset.tie.value('description[1]/.', 'nvarchar(max)') as [description]
 FROM
    [$schema.metadata.encapsulation].[_Schema] S
 CROSS APPLY
    S.[schema].nodes('/schema/tie') as Nodeset(tie);
 GO
+
+-- Key view -----------------------------------------------------------------------------------------------------------
+-- The key view shows information about all the keys in a schema
+-----------------------------------------------------------------------------------------------------------------------
+IF Object_ID('$schema.metadata.encapsulation$._Key', 'V') IS NOT NULL
+DROP VIEW [$schema.metadata.encapsulation].[_Key]
+GO
+
+CREATE VIEW [$schema.metadata.encapsulation].[_Key]
+AS
+SELECT
+   S.version,
+   S.activation,
+   Nodeset.keys.value('@of', 'nvarchar(max)') as [of],
+   Nodeset.keys.value('@route', 'nvarchar(max)') as [route],
+   Nodeset.keys.value('@stop', 'nvarchar(max)') as [stop],
+   case [parent]
+      when 'tie'
+      then Nodeset.keys.value('../@role', 'nvarchar(max)')
+   end as [role],
+   case [parent]
+      when 'knot'
+      then Nodeset.keys.value('concat(../@mnemonic, ""_"")', 'nvarchar(max)') +
+          Nodeset.keys.value('../@descriptor', 'nvarchar(max)') 
+      when 'attribute'
+      then Nodeset.keys.value('concat(../../@mnemonic, ""_"")', 'nvarchar(max)') +
+          Nodeset.keys.value('concat(../@mnemonic, ""_"")', 'nvarchar(max)') +
+          Nodeset.keys.value('concat(../../@descriptor, ""_"")', 'nvarchar(max)') +
+          Nodeset.keys.value('../@descriptor', 'nvarchar(max)') 
+      when 'tie'
+      then REPLACE(Nodeset.keys.query('
+            for $$role in ../../*[local-name() = ""anchorRole"" or local-name() = ""knotRole""]
+            return concat($$role/@type, "_", $$role/@role)
+          ').value('.', 'nvarchar(max)'), ' ', '_')
+   end as [in],
+   [parent]
+FROM
+   [dbo].[_Schema] S
+CROSS APPLY
+   S.[schema].nodes('/schema//key') as Nodeset(keys)
+CROSS APPLY (
+   VALUES (
+      case
+         when Nodeset.keys.value('local-name(..)', 'nvarchar(max)') in ('anchorRole', 'knotRole')
+         then 'tie'
+         else Nodeset.keys.value('local-name(..)', 'nvarchar(max)')
+      end 
+   )
+) p ([parent]);
+GO
+
 -- Evolution function -------------------------------------------------------------------------------------------------
 -- The evolution function shows what the schema looked like at the given
 -- point in time with additional information about missing or added
@@ -482,21 +540,29 @@ BEGIN
          c.depth + 1 as depth
       from
          relatedUpwards c
-      cross apply
-         sys.dm_sql_referencing_entities(c.qualifiedName, 'OBJECT') r
       cross apply (
          select
-            cast('[' + r.referencing_schema_name + '].[' + r.referencing_entity_name + ']' as nvarchar(517)),
-            cast(r.referencing_entity_name as nvarchar(517))
-      ) n (qualifiedName, unqualifiedName)
+            refs.referencing_id
+         from 
+            sys.dm_sql_referencing_entities(c.qualifiedName, 'OBJECT') refs
+         where
+            refs.referencing_id <> OBJECT_ID(c.qualifiedName)
+      ) r
       join
          sys.objects o
       on
          o.[object_id] = r.referencing_id
       and
          o.type not in ('S')
-      where 
-         r.referencing_id <> OBJECT_ID(c.qualifiedName)
+      join 
+         sys.schemas s 
+      on 
+         s.schema_id = o.schema_id
+      cross apply (
+         select
+            cast('[' + s.name + '].[' + o.name + ']' as nvarchar(517)),
+            cast(o.name as nvarchar(517))
+      ) n (qualifiedName, unqualifiedName)
    )
    select distinct
       [object_id],
@@ -540,25 +606,33 @@ BEGIN
          c.depth - 1 as depth
       from
          relatedDownwards c
-      cross apply
-         sys.dm_sql_referenced_entities(c.qualifiedName, 'OBJECT') r
       cross apply (
-         select
-            cast('[' + r.referenced_schema_name + '].[' + r.referenced_entity_name + ']' as nvarchar(517)),
-            cast(r.referenced_entity_name as nvarchar(517))
-      ) n (qualifiedName, unqualifiedName)
-      join
+         select 
+            refs.referenced_id 
+         from
+            sys.dm_sql_referenced_entities(c.qualifiedName, 'OBJECT') refs
+         where
+            refs.referenced_minor_id = 0
+         and
+            refs.referenced_id <> OBJECT_ID(c.qualifiedName)
+         and 
+            refs.referenced_id not in (select [object_id] from #relatedUpwards)
+      ) r
+      join -- select top 100 * from 
          sys.objects o
       on
          o.[object_id] = r.referenced_id
       and
          o.type not in ('S')
-      where
-         r.referenced_minor_id = 0
-      and 
-         r.referenced_id <> OBJECT_ID(c.qualifiedName)
-      and
-         r.referenced_id not in (select [object_id] from #relatedUpwards)
+      join
+         sys.schemas s
+      on 
+         s.schema_id = o.schema_id
+      cross apply (
+         select
+            cast('[' + s.name + '].[' + o.name + ']' as nvarchar(517)),
+            cast(o.name as nvarchar(517))
+      ) n (qualifiedName, unqualifiedName)
    )
    select distinct
       relationType,

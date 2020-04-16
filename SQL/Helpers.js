@@ -126,6 +126,9 @@ while (anchor = schema.nextAnchor()) {
         attribute.isEquivalent = function() {
             return this.metadata.equivalent == 'true';
         };
+        attribute.isDeletable = function() {
+            return this.metadata.deletable == 'true';
+        };
         attribute.isRestatable = function() {
             return this.metadata.restatable == 'true';
         };
@@ -135,13 +138,19 @@ while (anchor = schema.nextAnchor()) {
         attribute.isHistorized = function() {
             return !!this['timeRange'];
         };
-        attribute.isKeyed = function () {
-            return this.keyRoles ? true : false;
-        }
+        attribute.getEncryptionGroup = function() {
+            if(!this.metadata.encryptionGroup || this.metadata.encryptionGroup.trim().length === 0) 
+                return;
+            return this.metadata.encryptionGroup;
+        };
         if(attribute.isHistorized())
             anchor.historizedAttributes.push(attribute.mnemonic);
         if(attribute.isKnotted())
             attribute.knot = schema.knot[attribute.knotRange];
+        if(attribute.getEncryptionGroup()) {
+            attribute.originalDataRange = attribute.dataRange;
+            attribute.dataRange = 'varbinary(max)';
+        }
     }
 }
 
@@ -215,6 +224,9 @@ while(tie = schema.nextTie()) {
     };
     tie.isHistorized = function() {
         return !!this['timeRange'];
+    };
+    tie.isDeletable = function() {
+        return this.metadata.deletable == 'true';
     };
     tie.isRestatable = function() {
         return this.metadata.restatable == 'true';
@@ -381,6 +393,49 @@ while (tie = schema.nextTie()) {
         return schema._iterator.anchorRole == 1;
     };
 }
+
+// create a key lookup
+var keyIdentifier, key;
+while (anchor = schema.nextAnchor()) {
+    while(attribute = anchor.nextAttribute()) {
+        if(attribute.key) {
+            for(keyIdentifier in attribute.key) {
+                key = attribute.key[keyIdentifier];
+                if(!schema.anchor[key.of].keys) 
+                    schema.anchor[key.of].keys = {};
+                if(!schema.anchor[key.of].keys[key.route])
+                    schema.anchor[key.of].keys[key.route] = {};
+                if(!schema.anchor[key.of].keys[key.route].stops)
+                    schema.anchor[key.of].keys[key.route].stops = {};
+                schema.anchor[key.of].keys[key.route].stops[key.stop] = {
+                    attribute: attribute,
+                    anchor: anchor
+                };
+            }
+        }
+    }
+}
+while (tie = schema.nextTie()) {
+    while(role = tie.nextRole()) {
+        if(role.key) {
+            for(keyIdentifier in role.key) {
+                key = role.key[keyIdentifier];
+                if(!schema.anchor[key.of].keys) 
+                    schema.anchor[key.of].keys = {};
+                if(!schema.anchor[key.of].keys[key.route])
+                    schema.anchor[key.of].keys[key.route] = {};
+                if(!schema.anchor[key.of].keys[key.route].stops)
+                    schema.anchor[key.of].keys[key.route].stops = {};
+                schema.anchor[key.of].keys[key.route].stops[key.stop] = {
+                    role: role,
+                    tie: tie
+                }
+            }
+        }
+    }
+}
+
+if(DEBUG) console.log(schema);
 
 // "global" variables
 schema.METADATA = schema.metadata.metadataUsage == 'true';

@@ -3,6 +3,8 @@
 <head>
     <meta charset="utf-8" />
     <meta http-equiv="X-UA-Compatible" content="chrome=1" />
+    <meta name="viewport" content="user-scalable=no, shrink-to-fit=no" />
+    <meta name="HandheldFriendly" content="true">    
     <title>Anchor Modeler</title>
     <!-- web fonts -->
     <link href='http://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' type='text/css'/>
@@ -45,7 +47,7 @@
         <!--
         "use strict"; // be safe!
 
-        var VERSION = 0.99;
+        var VERSION = '0.99.5';
 
         // change to false in beta
         var RELEASE = false;
@@ -118,7 +120,13 @@
             equivalentSuffix: 'EQ',
             equivalentRange: 'tinyint',
             databaseTarget: 'SQLServer',
-            temporalization: 'uni'
+            temporalization: 'uni', 
+            deletability: 'false',
+            deletablePrefix: 'Deletable',
+            deletionSuffix: 'Deleted',
+            privacy: 'Ignore', 
+            checksum: 'false',
+            encryptionGroup: ''
         };
 
         // Generate UUID function https://jsfiddle.net/xg7tek9j/7/
@@ -712,6 +720,50 @@
             idToComponent: {},
             version: -1,
             versions: [],
+            // WIP: keys model
+            routes: {},
+            interactive: false,
+            // in interactive mode keys are added on the fly, in non-interactive mode they need to be prepared
+            setInteractive: function(interactive) {
+                this.interactive = interactive || false;
+            },
+            prepareKeys: function() {
+                var component; 
+                for(var i = 0; i < this.components.length; i++) {
+                    component = this.components[i];
+                    if(component.keys && component.keys.length > 0) {
+                        for(var j = 0; j < component.keys.length; j++)
+                            this.addKey(component, component.keys[j]);
+                    }
+                }                
+            },
+            addKey: function(component, key) {
+                var hash = key.of + '|' + key.route; // ugly concat, but that's life
+                var anchorLookup = this.getAnchorLookup();
+                if(!this.routes[hash]) {
+                    this.routes[hash] = {
+                        name: key.route,
+                        start: anchorLookup[key.of],
+                        stops: {}
+                    };
+                }
+                this.routes[hash].stops[key.stop] = {
+                    component: component, 
+                    key: key // this is the key as represented in the component
+                };
+            },
+            changeRouteName: function(route, name) {
+                var oldHash = route.start.mnemonic + '|' + route.name;
+                if(this.routes[oldHash]) 
+                    delete this.routes[oldHash];
+                route.name = name;
+                var newHash = route.start.mnemonic + '|' + route.name;
+                this.routes[newHash] = route;
+                for(var stopNumber in route.stops) {
+                    var stop = route.stops[stopNumber];
+                    stop.key.route = name;
+                }
+            },
             getAnchorLookup: function() {
                 var anchorLookup = Object.create(null);
                 var component;
@@ -747,6 +799,7 @@
             empty: function() {
                 this.components = [];
                 this.visibleNodes = [];
+                this.routes = {};
                 this.idToComponent = Object.create(null);
                 SVGLayer.clearAll();
                 NAVLayer.clearAll();
@@ -821,6 +874,11 @@
                 if(component) {
                     this.components.push(component);
                     this.idToComponent[component.id] = component;
+                    // WIP: keys
+                    if(this.interactive && component.keys && component.keys.length > 0) {
+                        for(var i = 0; i < component.keys.length; i++)
+                            this.addKey(component, component.keys[i]);
+                    }
                     // this.sort();
                     this.invalidateComponent(component);
                     this.refresh();
@@ -895,6 +953,7 @@
             },
             fromXML: function(xml) {
                 if(xml) {
+                    this.setInteractive(false);
                     this.empty();
                     var schemaElement = xml.documentElement;
                     var metadata = schemaElement.getElementsByTagName('metadata');
@@ -953,6 +1012,8 @@
                     var ties = xml.getElementsByTagName('tie');
                     for (i = 0; i < ties.length; i++)
                         this.addComponent(Tie.prototype.fromXML(ties[i]));
+                    // keys must be added last since they may provide a path through many of the above
+                    this.prepareKeys();
                     // implode nodes
                     var component, allComponents = [];
                     for(i = 0; component = this.components[i]; i++) {
@@ -962,6 +1023,7 @@
                         }
                     }
                     this.explode(allComponents, false);
+                    this.setInteractive(true);
                     this.refresh();
                 }
             },
@@ -1057,6 +1119,7 @@
                     this.refresh();
                     DrawingEngine.start(true);
                 }
+                return true; // close menu
             },
             connect: function(components) {
                 var node, anchor, attribute, tie, knot, key, keyRole;
@@ -1110,6 +1173,7 @@
                 }                 
                 this.recordState();
                 DrawingEngine.start(true);
+                return true; // close menu
             },
             toggleKnotted: function(components) {
                 var dx, dy;
@@ -1150,6 +1214,7 @@
                 this.recordState();
                 this.refresh();
                 DrawingEngine.start(true);
+                return true; // close menu
             },
             toggleHistorized: function(components) {
                 var component, node;
@@ -1162,7 +1227,124 @@
                 }
                 this.recordState();
                 DrawingEngine.start(false);
+                return true; // close menu
             },
+            // WIP: keys operations
+            createKey: function(components) {
+                var i, id, anchor, component, stopComponents = [];
+                for(i = 0; component = components[i]; i++) {
+                    if(component.node.type === NodeType.ANCHOR) 
+                        anchor = component;
+                    else
+                        stopComponents.push(component);
+                }
+                if(stopComponents.length > 0)
+                    id = UniqueIdentity.nextId();
+                for(i = 0; component = stopComponents[i]; i++) {
+                    var stopNumber = (i + 1).toString();
+                    var key = {
+                        id: id,
+                        stop: stopNumber,
+                        route: '?Route ' + id + '?',
+                        of: anchor.mnemonic                                                        
+                    };
+                    component.keys.push(key);
+                    this.addKey(component, key);
+                }
+                this.recordState();
+                EventHandler.clearSelection();
+                DrawingEngine.start(false);
+                return true; // close menu
+            },
+            addToKey: function(components) {
+                var route = EventHandler.selectedRoute;
+                if(route) {
+                    var component;
+                    for(var i = 0; i < components.length; i++) {
+                        component = components[i];
+                        var maxStopNumber = 0;
+                        for(var stopNumber in route.stops) {
+                            if(parseInt(stopNumber) > maxStopNumber)
+                                maxStopNumber = parseInt(stopNumber);
+                        }
+                        // last stop cannot be the same stop
+                        if(route.stops[maxStopNumber.toString()].component !== component) {
+                            maxStopNumber = (maxStopNumber + 1).toString();
+                            var key = {
+                                stop: maxStopNumber,
+                                route: route.name,
+                                of: route.start.mnemonic                                
+                            };
+                            component.keys.push(key);
+                            route.stops[maxStopNumber] = {
+                                component: component,
+                                key: key // this is the key as represented in the component
+                            }
+                        }
+                    }
+                    this.recordState();
+                    EventHandler.clearSelection();
+                    DrawingEngine.start(false);
+                }
+                return true; // close menu
+            },         
+            removeFromKey: function(components) {
+                var route = EventHandler.selectedRoute;
+                if(route) {
+                    var component, deletesHaveBeenMade = false, maxStopNumber = 0;
+                    for(var i = 0; i < components.length; i++) {
+                        component = components[i];
+                        for(var stopNumber in route.stops) {
+                            if(parseInt(stopNumber) > maxStopNumber)
+                                maxStopNumber = parseInt(stopNumber);
+                            if(route.stops[stopNumber].component == component) {
+                                var keyIndex = component.keys.indexOf(route.stops[stopNumber].key);
+                                component.keys.splice(keyIndex, 1);
+                                delete route.stops[stopNumber];
+                                deletesHaveBeenMade = true;
+                            }
+                        }
+                    }
+                    // renumbering of stops
+                    if(deletesHaveBeenMade) {
+                        var stops = [];
+                        for(var stopNumber = 1; stopNumber <= maxStopNumber; stopNumber++) {
+                            if(route.stops[stopNumber]) 
+                                stops.push(route.stops[stopNumber]);
+                        }
+                        if(stops.length > 0) {
+                            route.stops = {};
+                            for(var s = 0; s < stops.length; s++) {
+                                var newStopNumber = (s + 1).toString();
+                                stops[s].key.stop = newStopNumber;
+                                route.stops[newStopNumber] = stops[s];
+                            }
+                        }
+                        // we removed the last stop of the route
+                        else {
+                            var hash = route.start.mnemonic + '|' + route.name;
+                            if(route.routeInput) {
+                                document.body.removeChild(route.routeInput);
+                                delete route.routeInput;
+                            }
+                            if(route.svgKeyRouteText) {
+                                SVGLayer.keys.removeChild(route.svgKeyRouteText);
+                                delete route.svgKeyRouteText;
+                            }
+                            if(route.svgKeyRoute) {
+                                SVGLayer.keys.removeChild(route.svgKeyRoute);
+                                delete route.svgKeyRoute;
+                            }
+                            EventHandler.unselectRoute();
+                            delete Model.routes[hash];
+                        }
+                    }
+                    this.recordState();
+                    EventHandler.clearSelection();
+                    DrawingEngine.start(false);                    
+                }                
+                return true; // close menu
+            },   
             toggleIdentifier: function(components) {
                 var ties = [], component, node, edge;
                 for(var i = 0; i < components.length; i++) {
@@ -1181,6 +1363,7 @@
                     ties[i].checkIdentifiers();
                 this.recordState();
                 DrawingEngine.start(false);
+                return false; // do not close menu
             },
             makeFirstRole: function(components) {
                 var tie, component, node, edge;
@@ -1198,6 +1381,7 @@
                 }
                 this.recordState();
                 DrawingEngine.start(false);
+                return false; // do not close menu
             },
             makeFirstKeyRole: function(components) {
                 var key, component, node, edge;
@@ -1232,6 +1416,7 @@
                 this.recordState();
                 this.refresh();
                 DrawingEngine.start(true);
+                return false; // do not close menu
             },
             addKey: function(components) {
                 var dx, dy, node, component;
@@ -1282,6 +1467,7 @@
                 this.recordState();
                 this.refresh();
                 DrawingEngine.start(true);
+                return false; // do not close menu
             },
             addAnchor: function(components) {
                 var dx, dy, component, node;
@@ -1298,6 +1484,7 @@
                 this.recordState();
                 this.refresh();
                 DrawingEngine.start(true);
+                return false; // do not close menu
             },
             addTieAndAnchor: function(components) {
                 var dx, dy, component, node;
@@ -1319,6 +1506,7 @@
                 this.recordState();
                 this.refresh();
                 DrawingEngine.start(true);
+                return false; // do not close menu
             },
             addKnot: function(components) {
                 var dx, dy, component, node;
@@ -1335,6 +1523,7 @@
                 this.recordState();
                 this.refresh();
                 DrawingEngine.start(true);
+                return false; // do not close menu
             },
             explode: function(components, startEngine) {
                 var node, component, e, i, j, k, edge, otherNode, otherComponent;
@@ -1445,62 +1634,9 @@
                 this.refresh();
                 if(startEngine == null || startEngine)
                     DrawingEngine.start(true);
-            },
-            hideShowKeys: function(components, startEngine) {
-                var node, component, e, i, j, k, edge, otherNode, otherComponent;
-                var role, knot, knotComponent, knotEdge, knotEdgeComponent, visibleEdges, keyEdge, keyEdgeComponent;
-                // If we select an Anchor then we add the keys of the achor to the components array. 
-                if(components[0].node.type === NodeType.ANCHOR) {
-                    var keys = components[0].node.getConnectedNodesOfType(NodeType.KEY)
-                    for(k = 0; node = keys[k]; k++){
-                        components.push(Model.nodeToComponent(node));
-                    }
-                }
-                for(i = 0; component = components[i]; i++) {
-                    node = component.node;
-                    if(node.type === NodeType.KEY) {
-                        var anchor = Model.nodeToComponent(node.getConnectedNodesOfType(NodeType.ANCHOR)[0]);
-                        if(component.imploded) {
-                            var dx = 2 * LayoutEngine.normalDistance * Math.cos(0);
-                            var dy = 2 * LayoutEngine.normalDistance * Math.sin(0);
-                            node.xPosition = node.xPosition + dx;
-                            node.yPosition = node.yPosition + dy;
-                            node.start();
-                            component.setFixed(false);
-                            component.show();
-                            component.imploded = false;
-                            node.visible = true;                                                        
-                            for(j = 0; edge = node.edges[j]; j++) {
-                                otherNode = edge.node === node ? edge.otherNode : edge.node;
-                                if(!anchor.imploded || otherNode.type === NodeType.ANCHOR){
-                                    role = this.nodeToComponent(edge);
-                                    edge.start();
-                                    role.show();
-                                    edge.visible = true;                                
-                                }
-                            }                            
-                        }
-                        else {
-                            for(j = 0; edge = node.edges[j]; j++) {
-                                otherNode = edge.node === node ? edge.otherNode : edge.node;
-                                if(!anchor.imploded || otherNode.type === NodeType.ANCHOR){                                
-                                    role = this.nodeToComponent(edge);
-                                    role.hide();
-                                    edge.stop();
-                                    edge.visible = false;
-                                }                                
-                            }
-                            component.hide();
-                            component.imploded = true;
-                            node.stop();
-                            node.visible = false;                            
-                        }
-                    }
-                }
-                this.refresh();
-                if(startEngine == null || startEngine)
-                    DrawingEngine.start(true);
-            }            
+                return false; // do not close menu
+            }
+
         };
 
         var DrawingEngine = {
@@ -1510,7 +1646,8 @@
             running: false,
             miniCounter: 0,
             miniature: null,
-            showNames: false,
+            showNames: true,
+            showKeys: true,
             coloring: true,
             newState: true,
             miniatureFramesBetweenRefresh: 50,
@@ -1653,9 +1790,104 @@
                     centerElement.r.baseVal.value = 100*(Math.abs(partition.xVelocity) + Math.abs(partition.yVelocity));
                 }
             },
+            // WIP: keys draw
+            drawRoutes: function() {
+                var route;
+                for(var hash in Model.routes) {  
+                    route = Model.routes[hash];
+                    // create some utility functions on the route
+                    if(!route.toggleHighlight) {
+                        route.hightlighted = false;
+                        route.toggleHighlight = function() {
+                            if(this.svgKeyRoute) {
+                                var hash = this.svgKeyRoute.getAttribute('id');
+                                if(!this.hightlighted) {
+                                    this.svgKeyRoute.setAttributeNS(null, 'class', 'routeSelected'); 
+                                    if(!this.svgKeyRouteText) {
+                                        this.svgKeyRouteText = document.createElementNS(SVGNS, 'text');
+                                        this.svgKeyRouteText.setAttributeNS(null, 'class', 'routeText');
+                                        this.svgKeyRouteText.textPath = document.createElementNS(SVGNS, 'textPath');
+                                        this.svgKeyRouteText.text = document.createTextNode(this.name);
+                                        this.svgKeyRouteText.textPath.appendChild(this.svgKeyRouteText.text);
+                                        this.svgKeyRouteText.textPath.setAttributeNS(null, 'href', '#' + hash);
+                                        this.svgKeyRouteText.textPath.setAttributeNS(null, 'startOffset', '17');
+                                        this.svgKeyRouteText.appendChild(this.svgKeyRouteText.textPath);
+                                        SVGLayer.keys.appendChild(this.svgKeyRouteText);
+                                    }
+                                    for(var stopNumber in this.stops) 
+                                        this.stops[stopNumber].component.postfixes.push(stopNumber);
+                                    this.hightlighted = true;
+                                    DrawingEngine.start(false);
+                                }   
+                                else {
+                                    if(this.svgKeyRouteText) {
+                                        SVGLayer.keys.removeChild(this.svgKeyRouteText);
+                                        delete this.svgKeyRouteText;
+                                    }
+                                    for(var stopNumber in this.stops) 
+                                        this.stops[stopNumber].component.postfixes = [];
+                                    this.svgKeyRoute.setAttributeNS(null, 'class', 'route'); 
+                                    this.hightlighted = false;
+                                    DrawingEngine.start(false);
+                                }                         
+                            }
+                        }
+                    }
+                    // this is the actual svg element
+                    if(!route.svgKeyRoute) {
+                        route.svgKeyRoute = document.createElementNS(SVGNS, 'path');
+                        route.svgKeyRoute.component = route; // for use in captured events
+                        route.svgKeyRoute.setAttributeNS(null, 'id', hash);
+                        route.svgKeyRoute.setAttributeNS(null, 'class', 'route');
+                        route.svgKeyRoute.addEventListener('mouseover', function(e) { 
+                            if(!EventHandler.routeSelected() && !this.component.hightlighted) 
+                                this.component.toggleHighlight();
+                        }, false);
+                        route.svgKeyRoute.addEventListener('mouseout', function(e) { 
+                            if(!EventHandler.routeSelected() && this.component.hightlighted) 
+                                this.component.toggleHighlight(); 
+                        }, false);
+                        route.svgKeyRoute.addEventListener('click', function(e) {
+                            EventHandler.clearInteraction(); // remove the click that would otherwise result in panning
+                            var hash = this.getAttribute('id');
+                            var route = Model.routes[hash];                            
+                            if(!EventHandler.routeSelected()) {
+                                if(!route.hightlighted) route.toggleHighlight();
+                                EventHandler.selectRoute(route);
+                                // add a text box for the route name
+                                route.routeInput = document.createElement('input');
+                                route.routeInput.setAttribute('id', 'route');
+                                route.routeInput.value = route.name;
+                                route.routeInput.addEventListener('input', function(e) {
+                                    Model.changeRouteName(route, e.target.value.trim());
+                                    var hash = (route.start.mnemonic + '|' + route.name).trim();
+                                    route.svgKeyRoute.setAttributeNS(null, 'id', hash);
+                                    route.svgKeyRouteText.textPath.setAttributeNS(null, 'href', '#' + hash);
+                                    route.svgKeyRouteText.text.nodeValue = e.target.value;
+                                }, false);
+                                document.body.appendChild(route.routeInput);
+                            }
+                            else if(EventHandler.routeSelected() == route) {
+                                if(route.hightlighted) route.toggleHighlight();
+                                EventHandler.clearSelection();
+                            }
+                        }, false);
+                        SVGLayer.keys.appendChild(route.svgKeyRoute);
+                    }
+                    var stops = route.start.node.xPosition.toFixed(2) + ',' + route.start.node.yPosition.toFixed(2);
+                    for(var stopNumber in route.stops) {
+                        stops += ' ' + 
+                            route.stops[stopNumber].component.node.xPosition.toFixed(2) + ',' + 
+                            route.stops[stopNumber].component.node.yPosition.toFixed(2);
+                    }
+                    route.svgKeyRoute.setAttributeNS(null, 'd', 'M' + stops);
+                }
+            },
             draw: function() {
                 if(DEBUG)
                     this.drawPartitions();
+                if(this.showKeys)
+                    this.drawRoutes();
                 // draw the miniature every minirate frames
                 this.miniCounter = (this.miniCounter + 1) % this.miniatureFramesBetweenRefresh;
                 var component, node;
@@ -1722,6 +1954,13 @@
                 this.usedIds[id] = true;
                 return id;
             }
+        };
+
+        function createOption(value) {
+            var o = document.createElement('option');
+            o.value = value;
+            o.text = value;
+            return o;
         };
 
         var Editables = {
@@ -1869,6 +2108,21 @@
                 event: 'click',
                 attributes: ['type', 'checkbox']
             },
+            deletabilityEdit: {
+                name: 'Deletable',
+                description:
+                       'Check this if you want to be able to "delete" values using an update statement ' +
+                       'with a null value and a later changing time then of the latest existing value. ' +
+                       'Affected rows will be moved to a deletion table.',
+                setMember: function (element, component) { component.deletable = element.checked; },
+                getMember: function (component) { return component.deletable; },
+                setElement: function (element, component) { element.checked = component.deletable; },
+                getElement: function (element) { return element.checked; },
+                editable: true,
+                type: 'input',
+                event: 'click',
+                attributes: ['type', 'checkbox']
+            },
             restatabilityEdit: {
                 name: 'Restatable',
                 description:
@@ -1943,6 +2197,22 @@
                 event: 'click',
                 attributes: ['type', 'checkbox']
             },
+            encryptionGroupEdit: {
+                name: 'Encryption group',
+                description:
+                        'Setting this to anything but an empty string indicates that your data should be encrypted at rest. ' +
+                        'When encryption is used, data is encrypted according to different encryption gruoups. These ' +
+                        'groups are identified by the strings you assign here.',
+                setMember: function (element, component) { component.encryptionGroup = element.value; },
+                getMember: function (component) { return component.encryptionGroup; },
+                setElement: function (element, component) { element.value = component.encryptionGroup; },
+                getElement: function (element) { return element.value; },
+                editable: true,
+                type: 'input',
+                pattern: null, // anything and nothing are all fine
+                event: 'blur',
+                attributes: ['type', 'text']
+            },
             roleEdit: {
                 name: 'Role',
                 description:
@@ -2002,6 +2272,30 @@
                 pattern: null, // anything and nothing are all fine
                 event: 'blur',
                 attributes: ['rows', '3', 'cols', '16']
+            },
+            privacyEdit: {
+                name: 'Privacy action',
+                description:
+                        'Determines the action to take when data in this attribute becomes subject to ' +
+                        'privacy regulations, such as being "forgotten" according to GDPR. This is so ' +
+                        'far only of informational character and is stored in the model metadata, but ' +
+                        'can be used to create your own automation procedures.',
+                setMember: function (element, component) { component.privacy = element.value; },
+                getMember: function (component) { return component.privacy; },
+                setElement: function (element, component) { element.value = component.privacy; },
+                getElement: function (element) { return element.value; },
+                editable: true,
+                type: 'select',
+                pattern: null, // anything and nothing are all fine
+                event: 'click',
+                attributes: [],
+                elements: [
+                    createOption('Ignore'),
+                    createOption('Delete'),
+                    createOption('Anonymize'),
+                    createOption('Pseudonymize'),
+                    createOption('Encrypt')
+                ]
             }
         };
 
@@ -2014,6 +2308,17 @@
             lastY: null,
             scaleX: null,
             scaleY: null,
+            // WIP: keys event
+            selectedRoute: null,
+            selectRoute: function(key) {
+                this.selectedRoute = key;
+            },
+            routeSelected: function() {
+                return this.selectedRoute;
+            },
+            unselectRoute: function() {
+                this.selectedRoute = null;
+            },
             addComponentToSelection: function(component) {
                 if(this.selectedComponents.indexOf(component) < 0)
                     this.selectedComponents.push(component);
@@ -2028,6 +2333,18 @@
                 var component;
                 while(component = this.selectedComponents.pop()) {
                     this.removeComponentFromSelection(component);
+                }
+                if(this.selectedRoute) {
+                    if(this.selectedRoute.svgKeyRouteText) {
+                        SVGLayer.keys.removeChild(this.selectedRoute.svgKeyRouteText);
+                        delete this.selectedRoute.svgKeyRouteText;
+                    }
+                    if(this.selectedRoute.routeInput) {
+                        document.body.removeChild(this.selectedRoute.routeInput);
+                        delete this.selectedRoute.routeInput;
+                    }
+                    this.selectedRoute.svgKeyRoute.setAttributeNS(null, 'class', 'route'); 
+                    this.selectedRoute = null;
                 }
                 this.setInteraction(null);
             },
@@ -2087,7 +2404,7 @@
                     SVG.addEventListener('mouseover', EventHandler.endInteraction, false);
                     component.svg.graphicsElement.addEventListener('mousedown', EventHandler.prepareDragging, false);
                     component.svg.graphicsElement.addEventListener('click', EventHandler.clickComponent, false);
-                    component.showContextMenu(component, EventHandler.selectedComponents);
+                    component.showContextMenu(component, EventHandler.selectedComponents, EventHandler.selectedRoute);
                     DrawingEngine.setCursor('pointer');
                 }
                 event.stopPropagation();
@@ -2349,9 +2666,10 @@
                                 EventHandler.selectedComponents
                         ));
                 var component = EventHandler.interactedComponents.pop();
+                var selectedRoute = EventHandler.selectedRoute;
                 switch(String.fromCharCode(event.charCode || event.which)) {
                     case "e":
-                        component.showContextMenu(component, allComponents);
+                        component.showContextMenu(component, allComponents, selectedRoute);
                         component.contextMenu.toggle();
                         break;
                     case "a":
@@ -2489,6 +2807,7 @@
             this.svg = new Symbol(this);
             this.svg.makeInteractive();
             this.nav = new Symbol(this);
+            this.postfixes = [];
         }
         Component.prototype = {
             node: null,
@@ -2505,6 +2824,7 @@
             lastName: null,
             imploded: false,
             visible: false,
+            postfixes: null,
             // can be overridden by subclasses
             hide: function() {
                 this.visible = false;
@@ -2748,9 +3068,9 @@
                 }
             },
             contextMenu: null,
-            showContextMenu: function(hoveredComponent, selectedComponents) {
+            showContextMenu: function(hoveredComponent, selectedComponents, selectedRoute) {
                 if(!this.contextMenu)
-                    this.contextMenu = new ContextMenu(hoveredComponent, selectedComponents);
+                    this.contextMenu = new ContextMenu(hoveredComponent, selectedComponents, selectedRoute);
             },
             hideContextMenu: function() {
                 if(this.contextMenu) {
@@ -2767,6 +3087,7 @@
             // set members
             this.mnemonic = '?' + this.getId();
             this.descriptor = '!Unnamed!';
+            this.keys = [];
             this.editables.push(Editables.descriptorEdit);
             this.editables.push(Editables.threeMnemonicEdit);
             this.editables.push(Editables.encapsulationEdit);
@@ -2775,18 +3096,24 @@
             this.editables.push(Editables.positGeneratorEdit);
             this.editables.push(Editables.assertivenessEdit);
             this.editables.push(Editables.checksumEdit);
+            this.editables.push(Editables.deletabilityEdit);
+            this.editables.push(Editables.encryptionGroupEdit);
             this.editables.push(Editables.equivalenceEdit);
+            this.editables.push(Editables.privacyEdit);
             this.knotted = false;
             this.historized = historized;
+            this.deletable = Defaults.deletability === 'true';
             this.restatable = Defaults.restatability === 'true';
             this.idempotent = Defaults.idempotency === 'true';
             this.assertive = Defaults.assertiveness === 'true';
             this.equivalent = Defaults.equivalence === 'true';
-            this.checksum = false;
+            this.checksum = Defaults.checksum === 'true';
+            this.encryptionGroup = Defaults.encryptionGroup;
             this.encapsulation = Defaults.encapsulation;
+            this.privacy = Defaults.privacy;
             this.positIdentity = Defaults.positIdentity;
             this.positGenerator = Defaults.positGenerator === 'true';
-            this.operations.push('toggleKnotted','toggleHistorized');
+            this.operations.push('toggleKnotted','toggleHistorized', 'addToKey', 'removeFromKey', 'createKey');
             // set up SVG graphics
             this.svg.graphicsElement = document.createElementNS(SVGNS, 'g');
             // expando property as a reference back to the underlying component for use in event handlers
@@ -2825,13 +3152,17 @@
             positIdentity: '',
             positGenerator: true,
             historized: false,
+            deletable: false,
             restatable: true,
             idempotent: false,
             assertive: true,
             equivalent: false,
             checksum: false,
+            encryptionGroup: Defaults.encryptionGroup,
             knotted: false,
             encapsulation: Defaults.encapsulation,
+            privacy: Defaults.privacy,
+            keys: null,
             isInteractive: function() {
                 return true;
             },
@@ -2895,11 +3226,18 @@
                     this.editables.push(Editables.checksumEdit);
                 else if (knotted && index >= 0)
                     this.editables.splice(index, 1);
+                index = this.editables.indexOf(Editables.encryptionGroupEdit);
+                if(!knotted && index < 0)
+                    this.editables.push(Editables.encryptionGroupEdit);
+                else if (knotted && index >= 0)
+                    this.editables.splice(index, 1);                
                 index = this.editables.indexOf(Editables.equivalenceEdit);
                 if(!knotted && index < 0)
                     this.editables.push(Editables.equivalenceEdit);
                 else if (knotted && index >= 0)
                     this.editables.splice(index, 1);
+                if(this.encryptionGroup > 0 && knotted)
+                    this.encryptionGroup = ''; // knotted cannot be encrypted
                 if(this.checksum && knotted)
                     this.checksum = false; // knotted cannot be checksummed
                 if(this.equivalent && knotted)
@@ -2923,18 +3261,25 @@
                 y = y ? Number(y) : Math.random() * window.innerHeight;
                 fixed = fixed ? fixed === 'true' : false;
                 var metadata;
+                var privacy = Defaults.privacy;
                 var capsule = Defaults.encapsulation;
+                var encryptionGroup = Defaults.encryptionGroup;
+                var deletable = Defaults.deletability === 'true';
                 var restatable = Defaults.restatability === 'true';
                 var idempotent = Defaults.idempotency === 'true';
                 var assertive = Defaults.assertiveness === 'true';
                 var equivalent = Defaults.equivalence === 'true';
-                var checksum = false;
+                var checksum = Defaults.checksum === 'true';
                 var generator = Defaults.positGenerator === 'true';
                 for(i = 0; i < element.childNodes.length; i++)
                     if(element.childNodes.item(i).nodeName === 'metadata')
                         metadata = element.childNodes.item(i);
                 if(metadata) {
+                    privacy = metadata.getAttribute("privacy") || privacy;
                     capsule = metadata.getAttribute("capsule") || capsule;
+                    encryptionGroup = metadata.getAttribute("encryptionGroup") || encryptionGroup;
+                    var _deletable = metadata.getAttribute("deletable");
+                    deletable = _deletable ? _deletable === 'true' : deletable;
                     var _restatable = metadata.getAttribute("restatable") || metadata.getAttribute("restatements");
                     restatable = _restatable ? _restatable === 'true' : restatable;
                     var _idempotent = metadata.getAttribute("idempotent");
@@ -2962,8 +3307,17 @@
                 var parent = element.parentNode;
                 var identity = element.getAttribute("identity") || Defaults.positIdentity;
                 var attribute = new Attribute(x, y, historized);
-                var uuid = element.getAttribute("uuid");
-                attribute.uuid = uuid;
+                // WIP: keys
+                for(i = 0; i < element.childNodes.length; i++) {
+                    if(element.childNodes.item(i).nodeName === 'key') {
+                        var key = element.childNodes.item(i);
+                        attribute.keys.push({
+                            stop: key.getAttribute("stop"),
+                            route: key.getAttribute("route"),
+                            of: key.getAttribute("of")
+                        });
+                    }
+                }
                 attribute.setFixed(fixed);
                 attribute.setKnotted(knotted);
                 attribute.setHistorized(historized);
@@ -2972,12 +3326,15 @@
                 attribute.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
                 attribute.mnemonic = mnemonic;
                 attribute.descriptor = descriptor;
+                attribute.privacy = privacy;
                 attribute.encapsulation = capsule;
+                attribute.deletable = deletable;
                 attribute.restatable = restatable;
                 attribute.idempotent = idempotent;
                 attribute.assertive = assertive;
                 attribute.equivalent = equivalent;
                 attribute.checksum = checksum;
+                attribute.encryptionGroup = encryptionGroup;
                 attribute.positIdentity = identity;
                 attribute.positGenerator = generator;
                 var anchorLookup = Model.getAnchorLookup();
@@ -3057,6 +3414,11 @@
                 }
                 
                 var metadata = schema.createElement("metadata");
+                metadata.setAttribute("privacy", this.isEmpty(this.privacy) ?
+                        Defaults.privacy : this.privacy);
+                if(!this.isEmpty(this.encryptionGroup)) {
+                    metadata.setAttribute("encryptionGroup", this.encryptionGroup);
+                }
                 metadata.setAttribute("capsule", this.isEmpty(this.encapsulation) ?
                         Defaults.encapsulation : this.encapsulation);
                 if(Defaults.equivalence === 'true') {
@@ -3076,7 +3438,19 @@
                     metadata.setAttribute("idempotent", this.isEmpty(this.idempotent) ?
                             Defaults.idempotency === 'true' : this.idempotent);
                 }
+                metadata.setAttribute("deletable", this.isEmpty(this.deletable) ?
+                        Defaults.deletability === 'true' : this.deletable);                
                 attribute.appendChild(metadata);
+                // WIP: keys
+                if(this.keys && this.keys.length > 0) {
+                    for(var i = 0; i < this.keys.length; i++) {
+                        var key = schema.createElement("key");
+                        key.setAttribute("stop", this.keys[i].stop);
+                        key.setAttribute("route", this.keys[i].route);
+                        key.setAttribute("of", this.keys[i].of)
+                        attribute.appendChild(key);
+                    }
+                }
                 this.addLayoutXML(attribute, schema);
                 this.addDescriptionXML(attribute, schema, this.description);
                 element.appendChild(attribute);
@@ -3093,10 +3467,14 @@
                         name += 'r';
                     if(this.idempotent)
                         name += 'i';
+                    if(this.deletable)
+                        name += 'd';
                     if(Defaults.temporalization === 'crt' && this.assertive)
                         name += 'a';
                     name += ')';
                 }
+                if(this.postfixes.length > 0) 
+                    name += ' [' + this.postfixes.join(', ') + ']'; 
                 return name;
             },
             toString: function() {
@@ -3107,33 +3485,6 @@
                 return anchor.mnemonic + "_" + this.mnemonic + "_" + anchor.descriptor + "_" + this.descriptor;
             },
             draw: function(image) {
-                /*
-                if(!this.svg.stops) {
-                    this.svg.stops = [];
-                    var stop, route, of, i, offset = -20, height = 14;
-                    // TODO: speed up, clicking, editing, layering, route paths?
-                    for(i = 0; i < this.keys.length; i++) {
-                        stop = this.keys[i].stop;
-                        route = this.keys[i].route;
-                        of = this.keys[i].of;
-
-                        offset -= height * i;
-
-                        var stopElement = document.createElementNS(SVGNS, 'use');
-                        stopElement.setAttributeNS(XLINKNS, 'xlink:href', '#stop');
-                        stopElement.setAttributeNS(null, 'transform', 'translate(0,' + offset  + ')');
-                        stopElement.addEventListener('mouseover', EventHandler.modifyKey, false);
-                        stopElement.component = this;
-                        this.svg.stops.push(stopElement);
-                        this.svg.graphicsElement.appendChild(stopElement);
-                        var stopText = document.createElementNS(SVGNS, 'text');
-                        stopText.appendChild(document.createTextNode(stop + route.toLowerCase() + of));
-                        stopText.setAttributeNS(null, 'transform', 'translate(0,' + offset  + ')');
-                        stopText.setAttributeNS(null, 'class', 'stop');
-                        this.svg.graphicsElement.appendChild(stopText);
-                    }
-                }
-                */
                 image.control.setTranslate(this.node.xPosition, this.node.yPosition);
             }
         };
@@ -3333,7 +3684,7 @@
             this.editables.push(Editables.generatorEdit);
             this.encapsulation = Defaults.encapsulation;
             this.identity = Defaults.identity;
-            this.operations.push('addAttribute','addKey','addTie','addTieAndAnchor','explode','hideShowKeys');
+            this.operations.push('addAttribute','addTie','addTieAndAnchor','explode', 'createKey');
             // set up SVG graphics
             this.svg.graphicsElement = document.createElementNS(SVGNS, 'g');
             this.svg.graphicsElement.component = this;
@@ -3361,6 +3712,7 @@
             );
             this.nav.control.setTranslate(x, y);
             this.setNameable(true);
+            this.svg.nameElement.setAttributeNS(null, 'class', 'anchor');
             this.postCreationInitialization();
         }
         Anchor.prototype = {
@@ -3395,6 +3747,8 @@
                     name = this.descriptor;
                 if(this.imploded)
                     name = "(" + name + ")";
+                if(this.postfixes.length > 0) 
+                    name += ' [' + this.postfixes.join(', ') + ']'; 
                 return name;
             },
             toString: function() {
@@ -3509,6 +3863,7 @@
             Component.call(this, new Node(this.id, x, y, NodeType.KNOT));
             this.mnemonic = '?' + this.getId();
             this.descriptor = '!Unnamed!';
+            this.keys = [];
             this.editables.push(Editables.descriptorEdit);
             this.editables.push(Editables.threeMnemonicEdit);
             this.editables.push(Editables.encapsulationEdit);
@@ -3520,6 +3875,7 @@
             this.encapsulation = Defaults.encapsulation;
             this.checksum = false;
             this.equivalent = Defaults.equivalence === 'true';
+            this.operations.push('addToKey', 'removeFromKey', 'createKey');
             // SVG
             this.svg.graphicsElement = document.createElementNS(SVGNS, 'g');
             this.svg.graphicsElement.component = this;
@@ -3558,6 +3914,7 @@
             checksum: false,
             equivalent: false,
             encapsulation: Defaults.encapsulation,
+            keys: null,
             isInteractive: function() {
                 return true;
             },
@@ -3570,6 +3927,8 @@
                     name = this.toString();
                 else
                     name = this.descriptor;
+                if(this.postfixes.length > 0) 
+                    name += ' [' + this.postfixes.join(', ') + ']'; 
                 return name;
             },
             toString: function() {
@@ -3637,7 +3996,17 @@
                 var dataRange = element.getAttribute("dataRange") || '';
                 var uuid = element.getAttribute("uuid");
                 var knot = new Knot(x, y);
-                knot.uuid = uuid;
+                // WIP: keys
+                for(i = 0; i < element.childNodes.length; i++) {
+                    if(element.childNodes.item(i).nodeName === 'key') {
+                        var key = element.childNodes.item(i);
+                        knot.keys.push({
+                            stop: key.getAttribute("stop"),
+                            route: key.getAttribute("route"),
+                            of: key.getAttribute("of")
+                        });
+                    }
+                }
                 knot.setFixed(fixed);
                 knot.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
                 knot.mnemonic = mnemonic;
@@ -3673,7 +4042,16 @@
                     metadata.setAttribute("equivalent", this.isEmpty(this.equivalent) ? '' : this.equivalent);
                 }
                 knot.appendChild(metadata);
-
+                // WIP: keys
+                if(this.keys && this.keys.length > 0) {
+                    for(var i = 0; i < this.keys.length; i++) {
+                        var key = schema.createElement("key");
+                        key.setAttribute("stop", this.keys[i].stop);
+                        key.setAttribute("route", this.keys[i].route);
+                        key.setAttribute("of", this.keys[i].of)
+                        knot.appendChild(key);
+                    }
+                }
                 this.addLayoutXML(knot, schema);
                 this.addDescriptionXML(knot, schema, this.description);
                 return knot;
@@ -3691,6 +4069,7 @@
             // call the parent constructor
             Component.call(this, new Node(this.id, x, y, NodeType.TIE));
             this.historized = historized;
+            this.deletable = Defaults.deletability === 'true';
             this.restatable = Defaults.restatability === 'true';
             this.idempotent = Defaults.idempotency === 'true';
             this.assertive = Defaults.assertiveness === 'true';
@@ -3698,6 +4077,7 @@
             this.editables.push(Editables.positIdentityEdit);
             this.editables.push(Editables.positGeneratorEdit);
             this.editables.push(Editables.assertivenessEdit);
+            this.editables.push(Editables.deletabilityEdit);
             this.positIdentity = Defaults.positIdentity;
             this.positGenerator = Defaults.positGenerator === 'true';
             this.operations.push('toggleHistorized','addKnot','addAnchor');
@@ -3735,6 +4115,7 @@
         Tie.prototype = {
             changingRange: Defaults.changingRange,
             historized: false,
+            deletable: false,
             restatable: true,
             idempotent: false,
             assertive: true,
@@ -3865,6 +4246,7 @@
                 fixed = fixed ? fixed === 'true' : false;
                 var metadata;
                 var capsule = Defaults.encapsulation;
+                var deletable = Defaults.deletability === 'true';
                 var restatable = Defaults.restatability === 'true';
                 var idempotent = Defaults.idempotency === 'true';
                 var assertive = Defaults.assertiveness === 'true';
@@ -3874,6 +4256,8 @@
                         metadata = element.childNodes.item(i);
                 if(metadata) {
                     capsule = metadata.getAttribute("capsule") || capsule;
+                    var _deletable = metadata.getAttribute("deletable");
+                    deletable = _deletable ? _deletable === 'true' : deletable;
                     var _restatable = metadata.getAttribute("restatable") || metadata.getAttribute("restatements");
                     restatable = _restatable ? _restatable === 'true' : restatable;
                     var _idempotent = metadata.getAttribute("idempotent");
@@ -3897,100 +4281,67 @@
                 tie.setHistorized(historized);
                 tie.changingRange = changingRange;
                 tie.encapsulation = capsule;
+                tie.deletable = deletable;
                 tie.restatable = restatable;
                 tie.idempotent = idempotent;
                 tie.assertive = assertive;
                 tie.positIdentity = identity;
                 tie.positGenerator = generator;
                 tie.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
-                var anchorLookup = Model.getAnchorLookup();
-                var knotLookup = Model.getKnotLookup();
                 var grandparent = element.parentNode.parentNode;
-                var j, d, type, role, roleName, identifier, coloring, anchor;
                 var anchorRoles = element.getElementsByTagName("anchorRole");
-                for(i = 0; i < anchorRoles.length; i++) {
-                    uuid = anchorRoles[i].getAttribute("uuid"); 
-                    type = anchorRoles[i].getAttribute("type") || "??";
-                    roleName = anchorRoles[i].getAttribute("role");
-                    if(!roleName || roleName.match(/![^role].*!/)) roleName = "!role" + UniqueIdentity.nextId() + "!";
-                    identifier = anchorRoles[i].getAttribute("identifier") || false;
-                    coloring = anchorRoles[i].getAttribute("coloring") || "#000000";
-                    for(d = 0; d < anchorRoles[i].childNodes.length; d++)
-                        if(anchorRoles[i].childNodes.item(d).nodeName === 'description')
-                            description = anchorRoles[i].childNodes.item(d);
-                    var anchors = grandparent.getElementsByTagName("anchor");
-                    for(j = 0; j < anchors.length; j++) {
-                        if(anchors[j].getAttribute("mnemonic") === type) {
-                            anchor = anchorLookup[anchors[j].getAttribute("mnemonic")];
-                            role = new Role(tie, anchor, (identifier === "true"));
-                            role.uuid = uuid;
-                            role.role = roleName;
-                            role.setColoring(coloring);
-                            role.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
-                            Model.addComponent(role);
-                            role.updateName();
-                            break; // only one should match
-                        }
-                    }
-                }
-                var knot, knotRoles = element.getElementsByTagName("knotRole");
-                for(i = 0; i < knotRoles.length; i++) {
-                    uuid = knotRoles[i].getAttribute("uuid");
-                    type = knotRoles[i].getAttribute("type") || "???";
-                    roleName = knotRoles[i].getAttribute("role");
-                    if(!roleName || roleName.match(/![^role].*!/)) roleName = "!role" + UniqueIdentity.nextId() + "!";
-                    identifier = knotRoles[i].getAttribute("identifier") || false;
-                    coloring = knotRoles[i].getAttribute("coloring") || "#000000";
-                    for(d = 0; d < knotRoles[i].childNodes.length; d++)
-                        if(knotRoles[i].childNodes.item(d).nodeName === 'description')
-                            description = knotRoles[i].childNodes.item(d);
-                    var knots = grandparent.getElementsByTagName("knot");
-                    for(j = 0; j < knots.length; j++) {
-                        if(knots[j].getAttribute("mnemonic") === type) {
-                            knot = knotLookup[knots[j].getAttribute("mnemonic")];
-                            role = new Role(tie, knot, (identifier === "true"));
-                            role.uuid = uuid;
-                            role.role = roleName;
-                            role.setColoring(coloring);
-                            role.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
-                            Model.addComponent(role);
-                            role.updateName();
-                            break; // only one should match
-                        }
-                    }
-                }
-                
-                var keyRole, keyRoles = element.getElementsByTagName("keyRole");
-                for(i = 0; keyRole = keyRoles[i]; i++) {
-                    uuid = keyRole.getAttribute("uuid");
-                    type = keyRole.getAttribute("type") || "???";
-                    roleName = keyRole.getAttribute("role");
-                    if(!roleName || roleName.match(/![^role].*!/)) roleName = "!role" + UniqueIdentity.nextId() + "!";
-                    identifier = keyRole.getAttribute("identifier");
-                    coloring = keyRole.getAttribute("coloring") || "#000000";
-                    var key, keys, edge, edges, anchor;
-                    var anchors = grandparent.getElementsByTagName("anchor");
-                    for(j = 0; anchor = anchors[j]; j++) {
-                        if(anchor.getAttribute("mnemonic") === type) {
-                            anchor = anchorLookup[anchor.getAttribute("mnemonic")];
-                            break; // only one should match
-                        }
-                    }
-                    keys = anchor.node.getConnectedNodesOfType(NodeType.KEY);
-                    for(var k = 0; key = keys[k]; k++) {
-                        if(key.mnemonic === roleName){
-                            role = new Role(tie, key, identifier);
-                            role.uuid = uuid;
-                            role.role = roleName;
-                            role.setColoring(coloring);
-                            role.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
-                            Model.addComponent(role);
-                            role.updateName();
-                        }
-                    }
-                }
+                if(anchorRoles && anchorRoles.length > 0) 
+                    this.parseRoles(
+                            tie,
+                            anchorRoles, 
+                            Model.getAnchorLookup(), 
+                            grandparent.getElementsByTagName("anchor")
+                    );
+                var knotRoles = element.getElementsByTagName("knotRole");
+                if(knotRoles && knotRoles.length > 0)
+                    this.parseRoles(
+                            tie,
+                            knotRoles, 
+                            Model.getKnotLookup(), 
+                            grandparent.getElementsByTagName("knot")
+                    );
                 tie.updateName();
                 return tie;
+            },
+            parseRoles: function(tie, roles, lookup, refs) {
+                var i, j, d, type, role, roleName, identifier, description, coloring, referred, key;
+                for(i = 0; i < roles.length; i++) {
+                    type = roles[i].getAttribute("type") || "??";
+                    roleName = roles[i].getAttribute("role");
+                    if(!roleName || roleName.match(/![^role].*!/)) roleName = "!role" + UniqueIdentity.nextId() + "!";
+                    identifier = roles[i].getAttribute("identifier") || false;
+                    coloring = roles[i].getAttribute("coloring") || "#000000";
+                    for(j = 0; j < refs.length; j++) {
+                        if(refs[j].getAttribute("mnemonic") === type) {
+                            referred = lookup[refs[j].getAttribute("mnemonic")];
+                            role = new Role(tie, referred, (identifier === "true"));
+                            role.role = roleName;
+                            role.setColoring(coloring);
+                            Model.addComponent(role);
+                            role.updateName();
+                            break; // only one should match
+                        }
+                    }
+                    for(d = 0; d < roles[i].childNodes.length; d++) {
+                        if(roles[i].childNodes.item(d).nodeName === 'description')
+                            description = roles[i].childNodes.item(d);
+                        // WIP: keys
+                        if(roles[i].childNodes.item(d).nodeName === 'key') {
+                            key = roles[i].childNodes.item(d);
+                            role.keys.push({
+                                stop: key.getAttribute("stop"),
+                                route: key.getAttribute("route"),
+                                of: key.getAttribute("of")
+                            });
+                        }
+                    }
+                    role.description = (description && description.firstChild) ? description.firstChild.nodeValue : '';
+                }
             },
             toXML: function(schema) {
                 var tie = schema.createElement("tie");
@@ -4026,6 +4377,16 @@
                     roleElement.setAttribute("identifier",
                             this.isEmpty(role.identifier) ? false : role.identifier);
                     this.addDescriptionXML(roleElement, schema, role.description || component.description);
+                    // WIP: keys
+                    if(role.keys && role.keys.length > 0) {
+                        for(var k = 0; k < role.keys.length; k++) {
+                            var key = schema.createElement("key");
+                            key.setAttribute("stop", role.keys[k].stop);
+                            key.setAttribute("route", role.keys[k].route);
+                            key.setAttribute("of", role.keys[k].of)
+                            roleElement.appendChild(key);
+                        }
+                    }
                     tie.appendChild(roleElement);
                 }
 
@@ -4041,8 +4402,9 @@
                     metadata.setAttribute("idempotent", this.isEmpty(this.idempotent) ?
                             Defaults.idempotency === 'true' : this.idempotent);
                 }
+                metadata.setAttribute("deletable", this.isEmpty(this.deletable) ?
+                        Defaults.deletability === 'true' : this.deletable);
                 tie.appendChild(metadata);
-
                 this.addLayoutXML(tie, schema);
                 this.addDescriptionXML(tie, schema, this.description);
                 return tie;
@@ -4057,10 +4419,14 @@
                             name += 'r';
                         if(this.idempotent)
                             name += 'i';
+                        if(this.deletable)
+                            name += 'd';
                         if(Defaults.temporalization === 'crt' && this.assertive)
                             name += 'a';
                         name += ')';
                     }
+                    if(this.postfixes.length > 0) 
+                        name += ' [' + this.postfixes.join(', ') + ']'; 
                 }
                 else
                     name = '';
@@ -4099,18 +4465,13 @@
             this.otherComponent = otherComponent;
             var roleNumber = identifier;
             this.identifier = identifier;
-            this.anchored = node.type === NodeType.ANCHOR || otherNode.type == NodeType.ANCHOR;
-            this.keyed = (node.type === NodeType.KEY || otherNode.type === NodeType.KEY);// && !anchored;
-            this.tied = (node.type === NodeType.TIE || otherNode.type === NodeType.TIE) && !this.keyed;
-            if (this.keyed) {
-                this.editables.push(Editables.coloringEdit);
-                this.operations.push('makeFirstKeyRole');
-            } else {
-                this.editables.push(Editables.roleEdit, Editables.coloringEdit);
-                this.operations.push('toggleIdentifier', 'makeFirstRole');
-            }
+            this.keys = [];
+            this.editables.push(Editables.roleEdit, Editables.coloringEdit);
+            this.operations.push('toggleIdentifier', 'makeFirstRole', 'addToKey', 'removeFromKey', 'createKey');
+            this.tied = node.type === NodeType.TIE || otherNode.type === NodeType.TIE;
             // SVG
             this.svg.pathElement = document.createElementNS(SVGNS, 'path');
+            this.svg.pathElement.setAttributeNS(null, 'class', 'edge');
             this.setColoring(this.coloring);
             this.svg.pathElement.setAttributeNS(null, 'd', 'M' + node.xPosition.toFixed(2) + ',' + node.yPosition.toFixed(2) +
                     ' Q' + controlPoint.xPosition.toFixed(2) + ',' + controlPoint.yPosition.toFixed(2) +
@@ -4198,8 +4559,7 @@
             identifier: true,
             coloring: '#000000',
             tied: false,
-            keyed: false,
-            anchored: false,
+            keys: null,
             setIdentifier: function(identifier) {
                 this.identifier = identifier;
                 if (this.keyed) {
@@ -4242,7 +4602,10 @@
                 this.fixed = false;
             },
             contextualName: function() {
-                return this.toString();
+                var name = this.toString();
+                if(this.postfixes.length > 0) 
+                    name += ' [' + this.postfixes.join(', ') + ']'; 
+                return name;
             },
             toString: function() {
                 return this.role;
@@ -4259,10 +4622,6 @@
                 image.pathControl.q.x = otherNode.xPosition;
                 image.pathControl.q.y = otherNode.yPosition;
                 if(this.tied && image.control) {
-                    // experimenting with cardinality placement
-//                    var l = image.pathElement.getTotalLength();
-//                    var p = image.pathElement.getPointAtLength(l/4);
-//                    image.control.setTranslate(p.x, p.y);
                     image.control.setTranslate(role.xPosition, role.yPosition);
                 }
                 if(this.keyed && image.control) {
@@ -4764,6 +5123,42 @@
         var Operations = {
             // operations are defined as 'method', 'display name', 'description', 'optional rule'
             list: [
+                // WIP: keys operations
+                ['addToKey',
+                    'Add selected to key',
+                    'Adds the selected item(s) to the selected key route.',
+                    function(allComponents) {
+                        return EventHandler.selectedRoute;
+                    }],
+                ['removeFromKey',
+                    'Remvove selected from key',
+                    'Removes the selected item(s) from the selected key route.',
+                    function(allComponents) {
+                        return EventHandler.selectedRoute;
+                    }],
+                ['createKey',
+                    'Create key from selected',
+                    'Creates a key route from the selected item(s) in the model.',
+                    function(allComponents) {
+                        if(allComponents.length < 2)
+                            return false;
+                        var component, anchors = 0, ties = 0, knots = 0, attributes = 0, roles = 0;
+                        for(var i = 0; component = allComponents[i]; i++) {
+                            if(component.node.type === NodeType.ANCHOR)
+                                anchors++;
+                            else if(component.node.type === NodeType.TIE)
+                                ties++;
+                            else if(component.node.type === NodeType.KNOT)
+                                knots++;
+                            else if(component.node.type === NodeType.ATTRIBUTE) 
+                                attributes++;
+                            else if(component.node.type === NodeType.EDGE) 
+                                roles++;
+                        }
+                        if(anchors != 1 || roles + knots + attributes == 0 || ties > 0)
+                            return false;
+                        return true;
+                    }],
                 ['erase',
                     '<u>D</u>elete selected...',
                     'Deletes the selected item(s) from the model.'],
@@ -4838,7 +5233,7 @@
             }
         };
 
-        function ContextMenu(hoveredComponent, selectedComponents) {
+        function ContextMenu(hoveredComponent, selectedComponents, selectedRoute) {
             var self = this;
 
             this.hoveredComponent = hoveredComponent;
@@ -4863,20 +5258,33 @@
             this.showEditables = false;
 
             var i, j, tr;
+            // WIP: keys edit
+            if(selectedRoute) {
+                this.topper.appendChild(document.createTextNode("Edit key of " + selectedRoute.start.mnemonic));
+            }
             // if we are operating a single node, show its editable fields
-            if(selectedComponents.length === 0 || (selectedComponents.length === 1 && selectedComponents[0] === hoveredComponent)) {
+            else if(selectedComponents.length === 0 || (selectedComponents.length === 1 && selectedComponents[0] === hoveredComponent)) {
                 this.topper.appendChild(document.createTextNode("Edit " + NodeType[hoveredComponent.node.type]));
                 for(i = 0; editable = hoveredComponent.editables[i]; i++) {
                     if(editable.editable) {
                         this.showEditables = true;
                         var element = document.createElement(editable.type);
                         element.className = 'editable';
-                        if(editable.pattern)
+                        if(editable.pattern) {
                             element.setAttribute('pattern', editable.pattern);
-                        for(j = 0; j < editable.attributes.length;) {
-                            var attribute = editable.attributes[j++];
-                            var value = editable.attributes[j++];
-                            element.setAttribute(attribute, value);
+                        }
+                        if(editable.attributes) {
+                            for(j = 0; j < editable.attributes.length;) {
+                                var attribute = editable.attributes[j++];
+                                var value = editable.attributes[j++];
+                                element.setAttribute(attribute, value);
+                            }
+                        }
+                        if(editable.elements) {
+                            for(j = 0; j < editable.elements.length;) {
+                                var subElement = editable.elements[j++];
+                                element.appendChild(subElement);
+                            }
                         }
                         editable.setElement(element, hoveredComponent);
                         element.editable = editable;
@@ -4959,7 +5367,8 @@
             editsHaveBeenMade: false,
             dragging: false,
             operate: function(button, components) {
-                Model[button.method](components);
+                if(Model[button.method](components))
+                    this.close();
             },
             edit: function(element, component) {
                 if(element && component) {
@@ -5152,10 +5561,20 @@
                 var img = new Image();
                 img.width = can.width = image.width.baseVal.value;
                 img.height = can.height = image.height.baseVal.value;
+                img.onload = function() {
+                    // draw the image onto the canvas
+                    ctx.drawImage(img, 0, 0, img.width, img.height);
+                }
                 img.src = this.toSVGDataURL(image);
-                // TODO: causes violation in latest Safari
-                ctx.drawImage(img, 0, 0, img.width, img.height);
                 return can.toDataURL('image/png');
+            },
+            screenshot: function(dataURL) {
+                var newtab = window.open('about:blank'); 
+                var img = newtab.document.createElement('img');
+                img.src = dataURL;
+                setTimeout(function(){
+                    newtab.document.write(img.outerHTML);
+                }, 0);
             },
             findNodeToExplode: function(node) {
                 var edge, otherNode;
@@ -5203,20 +5622,13 @@
                 var directive = database + '_' + temporalization + '.directive';
                 return directive;
             },
-            transform: function (xmlDocument, transformationURL, ownerDocument) {
+            transform: async function (xmlDocument, transformationURL, ownerDocument) {
                 var result;
-                var xmlhttp = new window.XMLHttpRequest();
                 // Added random parameter to prevent caching...
-                xmlhttp.open("GET", transformationURL + '?r=' + Math.random(), false);
-                xmlhttp.send(null);
+                var url = transformationURL + '?r=' + Math.random();
+                var xml = await this.loadXML(url);
                 var processor = new XSLTProcessor();
-                if(xmlhttp.responseXML) {
-                    processor.importStylesheet(xmlhttp.responseXML.documentElement);
-                }
-                else {
-                    var xml = new DOMParser().parseFromString(xmlhttp.responseText, 'text/xml');
-                    processor.importStylesheet(xml.documentElement);
-                }
+                processor.importStylesheet(xml.documentElement);
                 result = processor.transformToFragment(xmlDocument, ownerDocument);
                 return result;
             },
@@ -5244,22 +5656,28 @@
                 save.dispatchEvent(event);
                 (window.URL || window.webkitURL).revokeObjectURL(save.href);
             },
+            loadXML: async function(url) {
+                var response = await fetch(url);
+                var responseText = await response.text();
+                var xml = new DOMParser().parseFromString(responseText, 'text/xml');
+                return xml;                
+            },
             loadFromURL: function (url, layout) {
                 layout = typeof layout !== 'undefined' ? layout : false;
-                var xmlhttp = new window.XMLHttpRequest();
-                xmlhttp.open("GET", url, false);
-                xmlhttp.send(null);
-                EventHandler.clearSelection();
-                SVGLayer.clearAll();
-                NAVLayer.clearAll();
-                Model.uncloud();
-                Model.clearStates();
-                Model.fromXML(xmlhttp.responseXML);
-                Actions.setModelStatus();
-                Actions.resetZoom();
-                Actions.centerModel();
-                DrawingEngine.taint();
-                DrawingEngine.start(layout);
+                this.loadXML(url)
+                .then(xml => {
+                    EventHandler.clearSelection();
+                    SVGLayer.clearAll();
+                    NAVLayer.clearAll();
+                    Model.uncloud();
+                    Model.clearStates();
+                    Model.fromXML(xml);
+                    Actions.setModelStatus();
+                    Actions.resetZoom();
+                    Actions.centerModel();
+                    DrawingEngine.taint();
+                    DrawingEngine.start(layout);
+                });
             },
             modelStatusText: null,
             setModelStatus: function() {
@@ -5518,6 +5936,15 @@
                     SVGLayer.hide('names');
                 DrawingEngine.start(false);
             },
+            toggleKeys: function() {
+                EventHandler.clearSelection();
+                DrawingEngine.showKeys = !DrawingEngine.showKeys;
+                if(DrawingEngine.showKeys) 
+                    SVGLayer.show('keys');
+                else
+                    SVGLayer.hide('keys');
+                DrawingEngine.start(false);                
+            },
             toggleMnemonics: function () {
                 Settings.showMnemonics = !Settings.showMnemonics;
                 DrawingEngine.start(false);
@@ -5572,6 +5999,21 @@
                     alert("This model is not saved in the cloud. Please save the model before generating a URL.");
                 }
             },
+            generateSVG: function(graph) {
+                new CodePopover(Actions.preformat((new XMLSerializer()).serializeToString(graph)), true);
+            },
+            generateSQL: function() {
+                Sisulator.sisulate(Model.toXML(true), Actions.getDirective(), document)
+                .then(sql => {
+                    new CodePopover(Actions.preformat(sql), true)
+                });
+            },
+            generateXML: function() {
+                Actions.transform(Model.toXML(false), 'xml2html.xsl', document)
+                .then(fragment => {
+                    new CodePopover(fragment, false);
+                });
+            },
             generateHTML: function() {
                 var html = window.open('', '_newtab').document;
                 html.open();
@@ -5584,9 +6026,10 @@
                     '</body></html>'
                 );
                 html.close();
-                var fragment = this.transform(Model.toXML(false), 'xml2documentation.xsl', html);
-                // alert(new XMLSerializer().serializeToString(fragment));
-                html.body.appendChild(fragment);
+                this.transform(Model.toXML(false), 'xml2documentation.xsl', html)
+                .then(fragment => {
+                    html.body.appendChild(fragment);
+                });
             },
             jsonify: function(xml) {
                 var object = Sisulator.objectify(xml, Sisulator.MAP);
@@ -5644,7 +6087,15 @@
                 },
                 knotRole: function(xml, fragment) {
                     return fragment.getAttribute('type') + '_' + fragment.getAttribute('role');
-                }
+                },
+                // WIP: keys sisula
+                key: function(xml, fragment) {
+                    return fragment.getAttribute('of') + 
+                           '|' +
+                           fragment.getAttribute('route') + 
+                           '|' +
+                           fragment.getAttribute('stop');
+                }                
             },
             // used to replace certain element names with others
             replacer: function(name) {
@@ -5710,7 +6161,7 @@
                 // just initialize and return the result
                 return objectifier(xml.documentElement, map, {});
             },
-            sisulate: function(xml, directive) {
+            sisulate: async function(xml, directive) {
                 // objectify the xml
                 var schema = Sisulator.objectify(xml, Sisulator.MAP).schema;
                 var cacheDisabler = '';
@@ -5719,26 +6170,26 @@
                 var _sisula_ = '';
 
                 // process and evaluate all sisulas in the directive
-                var xmlhttp = new window.XMLHttpRequest();
-                xmlhttp.open("GET", directive + cacheDisabler, false);
-                xmlhttp.send(null);
-                var response = xmlhttp.responseText.replace(/\r/g, ''); // unify line breaks
+                var response = await fetch(directive + cacheDisabler);
+                var responseText = await response.text();
+
+                // unify line breaks and match
                 // only non-empty lines that are not comments (starts with #)
-                var scripts = response.match(/^[^#].+/gm);
+                var scripts = responseText.replace(/\r/g, '').match(/^[^#].+/gm);
                 var script;
                 var splitter = /\/\*~([\s\S]*?)~\*\//g; // split JS /*~ sisula template ~*/ JS
                 // process every sisula
                 for(var s = 0; script = scripts[s]; s++) {
-                    xmlhttp.open("GET", script.trim() + cacheDisabler, false);
-                    xmlhttp.send(null);
-                    var sisula = xmlhttp.responseText;
+                    response = await fetch(script.trim() + cacheDisabler);
+                    var sisula = await response.text();
                     // split language into JavaScript and SQL template components
                     var sisulets = sisula.split(splitter);
                     // substitute from SQL template to JavaScript
                     for(var i = 1; i < sisulets.length; i+=2) {
                         // honor escaped dollar signs
                         sisulets[i] = sisulets[i].replace(/[$]{2}/g, '§DOLLAR§'); // escaping dollar signs
-                        sisulets[i] = sisulets[i].replace(/["]{2}/g, '§QUOTED§'); // escaping double quotes
+                        sisulets[i] = sisulets[i].replace(/["]{2}/g, '§DOUBLE§'); // escaping double quotes
+                        sisulets[i] = sisulets[i].replace(/["]{1}/g, '§SINGLE§'); // escaping single quotes
                         sisulets[i] = sisulets[i].replace(/[$]{([\S\s]*?)}[$]/g, '" + $1 + "'); // multi-expression
                         sisulets[i] = sisulets[i].replace(/[$]\(([\S\s]*?)\)\?[^\S\n]*([^:\n]*)[:]?[^\S\n]*(.*)/g, '" + ($1 ? "$2" : "$3") + "'); // conditional
                         sisulets[i] = sisulets[i].replace(/[\$]([\w.]*?)(?:([\$])|([^\w.]|$))/g, '" + ($1 ? $1 : "") + "$3'); // single
@@ -5761,7 +6212,8 @@
                     }
                 }
                 _sisula_ = _sisula_.replace(/§DOLLAR§/g, '$'); // unescaping dollar signs
-                _sisula_ = _sisula_.replace(/§QUOTED§/g, '"'); // unescaping double quotes
+                _sisula_ = _sisula_.replace(/§SINGLE§/g, '\"'); // unescaping double quotes
+                _sisula_ = _sisula_.replace(/§DOUBLE§/g, '"'); // unescaping double quotes
                 _sisula_ = _sisula_.replace(/^\s*[\r\n]/gm, ''); // remove empty lines
                 _sisula_ = _sisula_.replace(/(\S+[^\S\n])(?:[^\S\n]+)/gm, '$1'); // consume multiple spaces, but not indentation
                 return _sisula_;
@@ -5771,7 +6223,7 @@
         var Settings = {
             // default values for some 'global' settings
             calculations: 'simple',
-            showMnemonics: true,
+            showMnemonics: false,
             showCardinalities: true,
             init: function() {
                 document.getElementById('damping').value = ((1 - LayoutEngine.damping) * 100).toFixed(0);
@@ -5792,6 +6244,7 @@
                 document.getElementById('defaultChronon').value = Defaults.chronon;
                 document.getElementById('defaultNow').value = Defaults.now;
                 document.getElementById('defaultChangingRange').value = Defaults.changingRange;
+                document.getElementById('deletability').checked = Defaults.deletability === 'true';
                 document.getElementById('restatability').checked = Defaults.restatability === 'true';
                 document.getElementById('idempotency').checked = Defaults.idempotency === 'true';
                 document.getElementById('metadataUsage').checked = Defaults.metadataUsage === 'true';
@@ -5803,6 +6256,9 @@
                 document.getElementById('changingSuffix').value = Defaults.changingSuffix;
                 document.getElementById('checksumSuffix').value = Defaults.checksumSuffix;
                 document.getElementById('identitySuffix').value = Defaults.identitySuffix;
+                document.getElementById('deletablePrefix').value = Defaults.deletablePrefix;
+                document.getElementById('deletionSuffix').value = Defaults.deletionSuffix;
+                document.getElementById('encryptionGroup').value = Defaults.encryptionGroup;
                 document.getElementById('naming').value = Defaults.naming;
             },
             resetDefaults: function(warn) {
@@ -5816,14 +6272,18 @@
                     reset = true;
                 if(reset) {
                     this.setEncapsulation('dbo');
+                    this.setPrivacy('Ignore');
                     this.setDefaultIdentity('int');
                     this.setDefaultChronon('datetime2(7)');
                     this.setDefaultNow('sysdatetime()');
                     this.setDefaultChangingRange('datetime');
                     this.setMetadataPrefix('Metadata');
+                    this.setDeletablePrefix('Deletable');
+                    this.setDeletionSuffix('Deleted');
                     this.setMetadataType('int');
                     this.setEquivalentSuffix('EQ');
                     this.setEquivalentRange('tinyint');
+                    this.setDeletability('false');
                     this.setRestatability('true');
                     this.setIdempotency('false');
                     this.setAssertiveness('true');
@@ -5845,6 +6305,8 @@
                     this.setPartitioning('false');
                     this.setEntityIntegrity('true');
                     this.setTemporalization('uni');
+                    this.setDeletability('false');
+                    this.setEncryptionGroup('');
                     this.setDatabase('SQLServer', false);
                     this.setNaming('improved');
                     this.init();
@@ -5902,10 +6364,13 @@
                 storage.setItem("miniatureFramesBetweenRefresh", DrawingEngine.miniatureFramesBetweenRefresh);
                 storage.setItem("calculations", this.calculations);
                 storage.setItem("encapsulation", Defaults.encapsulation);
+                storage.setItem("privacy", Defaults.privacy);
                 storage.setItem("defaultIdentity", Defaults.identity);
                 storage.setItem("defaultChronon", Defaults.chronon);
                 storage.setItem("defaultNow", Defaults.now);
                 storage.setItem("defaultChangingRange", Defaults.changingRange);
+                storage.setItem("deletablePrefix", Defaults.deletablePrefix);
+                storage.setItem("deletionSuffix", Defaults.deletionSuffix);
                 storage.setItem("metadataPrefix", Defaults.metadataPrefix);
                 storage.setItem("metadataType", Defaults.metadataType);
                 storage.setItem("equivalentSuffix", Defaults.equivalentSuffix);
@@ -5914,6 +6379,7 @@
                 storage.setItem("businessViews", Defaults.businessViews);
                 storage.setItem("decisiveness", Defaults.decisiveness);
                 storage.setItem("equivalence", Defaults.equivalence);
+                storage.setItem("deletability", Defaults.deletability);
                 storage.setItem("restatability", Defaults.restatability);
                 storage.setItem("idempotency", Defaults.idempotency);
                 storage.setItem("assertiveness", Defaults.assertiveness);
@@ -5928,6 +6394,7 @@
                 storage.setItem("reliabilityRange", Defaults.reliabilityRange);
                 storage.setItem("reliabilitySuffix", Defaults.reliabilitySuffix);
                 storage.setItem("deleteReliability", Defaults.deleteReliability);
+                storage.setItem("encryptionGroup", Defaults.encryptionGroup);
                 storage.setItem("assertionSuffix", Defaults.assertionSuffix);
                 storage.setItem("partitioning", Defaults.partitioning);
                 storage.setItem("entityIntegrity", Defaults.entityIntegrity);
@@ -5964,10 +6431,13 @@
                     this.setMiniRate(storage.getItem('miniatureFramesBetweenRefresh') || 50);
                     this.setCalculations(storage.getItem('calculations') || 'simple');
                     this.setEncapsulation(storage.getItem('encapsulation') || Defaults.encapsulation);
+                    this.setPrivacy(storage.getItem('privacy') || Defaults.privacy);
                     this.setDefaultIdentity(storage.getItem('defaultIdentity') || Defaults.identity);
                     this.setDefaultChronon(storage.getItem('defaultChronon') || Defaults.chronon);
                     this.setDefaultNow(storage.getItem('defaultNow') || Defaults.now);
                     this.setDefaultChangingRange(storage.getItem('defaultChangingRange') || Defaults.changingRange);
+                    this.setDeletablePrefix(storage.getItem('deletablePrefix') || Defaults.deletablePrefix);
+                    this.setDeletionSuffix(storage.getItem('deletionSuffix') || Defaults.deletionSuffix);
                     this.setMetadataPrefix(storage.getItem('metadataPrefix') || Defaults.metadataPrefix);
                     this.setMetadataType(storage.getItem('metadataType') || Defaults.metadataType);
                     this.setEquivalentRange(storage.getItem('equivalentRange') || Defaults.equivalentRange);
@@ -5990,6 +6460,8 @@
                     this.setAssertionSuffix(storage.getItem('assertionSuffix') || Defaults.assertionSuffix);
                     this.setPartitioning(storage.getItem('partitioning') || Defaults.partitioning);
                     this.setEntityIntegrity(storage.getItem('entityIntegrity') || Defaults.entityIntegrity);
+                    this.setDeletability(storage.getItem('deletability') || Defaults.deletability);
+                    this.setEncryptionGroup(storage.getItem('encryptionGroup') || Defaults.encryptionGroup);
                     this.setRestatability(storage.getItem('restatability') || Defaults.restatability);
                     this.setIdempotency(storage.getItem('idempotency') || Defaults.idempotency);
                     this.setAssertiveness(storage.getItem('assertiveness') || Defaults.assertiveness);
@@ -6038,6 +6510,9 @@
             setDeleteReliability: function(value) {
                 Defaults.deleteReliability = value;
             },
+            setEncryptionGroup: function(value) {
+                Defaults.encryptionGroup = value;
+            },
             setAssertionSuffix: function(value) {
                 Defaults.assertionSuffix = value;
             },
@@ -6050,20 +6525,6 @@
             setNaming: function(value) {
                 Defaults.naming = value;
             },
-            positIdentity: null,
-            positingRange: null,
-            positingSuffix: null,
-            positorRange: null,
-            positorSuffix: null,
-            reliabilityRange: null,
-            reliabilitySuffix: null,
-            deleteReliability: null,
-            assertionSuffix: null,
-            metadataPrefix: null,
-            metadataType: null,
-            equivalentSuffix: null,
-            equivalentRange: null,
-            assertiveness: null,
             addTextItem: function(item, destination, before, label, title, listener) {
                 if(!this[item]) {
                     this[item] = {
@@ -6188,6 +6649,12 @@
                     Editables.setEditability(Editables.assertivenessEdit, false);
                 }
             },
+            setDeletablePrefix: function(value) {
+                Defaults.deletablePrefix = value;
+            },
+            setDeletionSuffix: function(value) {
+                Defaults.deletionSuffix = value;
+            },
             setMetadataPrefix: function(value) {
                 Defaults.metadataPrefix = value;
             },
@@ -6256,6 +6723,9 @@
                     Editables.setEditability(Editables.equivalenceEdit, false);
                 }
             },
+            setDeletability: function(value) {
+                Defaults.deletability = value;
+            },
             setRestatability: function(value) {
                 Defaults.restatability = value;
             },
@@ -6273,6 +6743,9 @@
             },
             setEncapsulation: function(value) {
                 Defaults.encapsulation = value;
+            },
+            setPrivacy: function(value) {
+                Defaults.privacy = value;
             },
             setDefaultIdentity: function(value) {
                 Defaults.identity = value;
@@ -6691,11 +7164,11 @@
             SVGLayer = new Layer(SVG);
             SVGLayer.addLayer('debugPartitions');
             SVGLayer.addLayer('debug');
+            SVGLayer.addLayer('keys');
             SVGLayer.addLayer('edges');
             SVGLayer.addLayer('nodes');
-            SVGLayer.addLayer('keys');
             SVGLayer.addLayer('names');
-            SVGLayer.hide('names');
+            // SVGLayer.hide('names');
             SVGLayer.hide('debug');
             SVGLayer.hide('debugPartitions');
 
@@ -6755,7 +7228,8 @@
             else
                 Actions.loadFromURL('example.xml');
 
-            Actions.checkCloudConnectionStatus(false);
+            // all cloud stuff will have to be rewritten (no longer using Google Cloud)
+            //Actions.checkCloudConnectionStatus(false);
 
             // start the engine and let's go
             DrawingEngine.start(true);
@@ -6820,18 +7294,45 @@
                     text-anchor:        left;
                     dominant-baseline:  middle;
                     fill:               #000;
+                    pointer-events:     none;
+                }
+                .edge {
+                    pointer-events:     none;
+                }
+                .anchor {
+                    font-style:         italic;
+                    font-weight:        bold;
+                    stroke:             none;
+                    fill:               #c80514;
+                    pointer-events:     none;
                 }
                 .role {
                     font-style:         italic;
                     stroke:             none;
                     fill:               #000;
+                    pointer-events:     none;
                 }
-                .stop {
-                    font-size:          6pt;
-                    font-family:        "Consolas", "Andale Mono", monospace;
-                    text-anchor:        middle;
-                    dominant-baseline:  bottom;
-                    fill:               #fff;
+                .route {
+                    fill:               none;
+                    stroke:             rgba(42, 0, 0, 0.07);
+                    stroke-width:       32;
+                    stroke-linecap:     round;
+                    stroke-linejoin:    round;
+                }
+                .routeSelected {
+                    fill:               none;
+                    stroke:             rgba(242, 101, 101, 0.2);
+                    stroke-width:       42;
+                    stroke-linecap:     round;
+                    stroke-linejoin:    round;
+                }
+                .routeText {
+                    font-family:        "Impact", "Haettenschweiler", "Franklin Gothic Bold", "Charcoal", "Helvetica Inserat", "Bitstream Vera Sans Bold", "Arial Black", sans-serif;
+                    font-size:          20pt;
+                    font-weight:        normal;
+                    fill:               white;
+                    dominant-baseline:  middle;
+                    pointer-events:     none;
                 }
                 .bad {
                     fill:               #e00;
@@ -6954,9 +7455,6 @@
                 <line x1="-3" y1="0" x2="3" y2="0"/>
                 <line x1="-3" y1="3" x2="3" y2="3"/>
             </g>
-            <g id="stop">
-                <rect width="24" height="11" rx="2" ry="2" transform="translate(-12, -8)" style="fill:#708090;"/>
-            </g>
         </defs>
         <!-- layers are appended here -->
     </svg>
@@ -6973,9 +7471,11 @@
         <div id="file" class="menu">File
             <ul class="submenu">
                 <li title="Discards the current model and starts a new model with a minimal setup, a single anchor." onclick="Model.setupMinimal(true)">New model...</li>
+                <!--
                 <li title="Load a publicly stored model from the Google Cloud connection." onclick="Actions.listModelsInCloud('public')">Load public model from cloud...</li>
                 <li title="Load a privately stored model from the Google Cloud connection. Requires that you log in to your Google account." onclick="Actions.listModelsInCloud('private')">Load private model from cloud...</li>
                 <li title="Save the current model in the Google Cloud, either publicly or privately. If it already exists you will be given the option to overwrite the old model." onclick="Actions.saveModelInCloud(true)">Save model in cloud...</li>
+                -->
                 <li><i>Load model from local file:</i></li>
                 <li title="Load a model from an XML file accessible from your local computer."><input type="file" class="fileSelect" onchange="FileHandler.handleFiles(this.files); FileHandler.replaceInput(this.parentNode, this);"/></li>
                 <li title="Save model XML definition and settings in browser cache. This is also done automatically when leaving this page." onclick="save(window, true)">Save settings in browser cache...</li>
@@ -6991,6 +7491,7 @@
                 <li title="Toggle whether names should be visible in the modeler or not." onclick="Actions.toggleNames()">Toggle names</li>
                 <li title="Toggle whether full names including mnemonics or short names excluding mnemonics should be used." onclick="Actions.toggleMnemonics()">Toggle mnemonics</li>
                 <li title="Toggle whether coloring of edges should be visible or not." onclick="Actions.toggleColoring()">Toggle coloring</li>
+                <li title="Toggle whether key routes should be visible or not." onclick="Actions.toggleKeys()">Toggle keys</li>
                 <li title="Release all fixed nodes and fixate all released nodes." onclick="Actions.toggleFixation()">Toggle fixation</li>
                 <li title="Release all fixed nodes." onclick="Actions.releaseAll()">Release all fixed</li>
                 <li title="Hide attributes from anchors, and knots from both anchors and ties, in order to get a better overview of larger models." onclick="Actions.implodeAll()">Implode all</li>
@@ -7033,13 +7534,18 @@
                 <li title="With decisiveness a positor may only hold a single belief within each assertion class (positive, negative, uncertain). With indecisiveness the same positor may hold multiple beliefs at a single positing time. In order to then still be consistent, the total reliability or all beliefs at a given point in time needs an upper limit."><input id="decisiveness" class="inputDefaults" type="checkbox" onchange="Settings.setDecisiveness(this.checked ? 'true' : 'false')"/> Use decisiveness</li>
                 <li title="Entity integrity adds constraints ensuring that no temporal duplicates can co-exist for the same entity and version, that no negative recording time intervals can be stored, and that there are no overlapping intervals with respect to recording time. This is highly recommended."><input id="entityIntegrity" class="inputDefaults" type="checkbox" onchange="Settings.setEntityIntegrity(this.checked ? 'true' : 'false')"/> Use entity integrity</li>
                 <li title="Selects whether to use partitioning of data. Applies to equivalents in uni-temporal and positors in concurrent-reliance-temporal modeling."><input id="partitioning" class="inputDefaults" type="checkbox" onchange="Settings.setPartitioning(this.checked ? 'true' : 'false')"/> Use partitioning</li>
-                <li title="Generate SQL code for implementation of a model in a relational database." onclick="new CodePopover(Actions.preformat(Sisulator.sisulate(Model.toXML(true), Actions.getDirective(), document)), true)"> SQL code</li>
-                <li title="Generate a portable and compact XML representation of your model, including information about the graphical layout." onclick="new CodePopover(Actions.transform(Model.toXML(false), 'xml2html.xsl', document), false)"> XML code</li>
+                <li title="Generate SQL code for implementation of a model in a relational database." onclick="Actions.generateSQL()"> SQL code</li>
+                <li title="Generate a portable and compact XML representation of your model, including information about the graphical layout." onclick="Actions.generateXML()"> XML code</li>
                 <li title="Generate a JSON string to implement the model in a program." onclick="new CodePopover(Actions.preformat(Actions.jsonify(Model.toXML(false))), true)"> JSON string</li>
+                <!--
                 <li title="Generate a URL for a public model that can be shared over social media or through email." onclick="Actions.generateURL()"> URL for sharing</li>
+                -->
                 <li title="Generate an HTML legend that describes the items in your model." onclick="Actions.generateHTML()"> HTML documentation</li>
-                <li title="Generate a bitmap image of the view currently shown on screen." onclick="window.open(Actions.toPNGDataURL(SVG), '_newtab')">PNG screenshot</li>
-                <li title="Generate a vector image of the entire model." onclick="window.open(Actions.toSVGDataURL(SVG), '_newtab')">SVG screenshot</li>
+                <!--
+                <li title="Generate a bitmap image of the view currently shown on screen." onclick="Actions.screenshot(Actions.toPNGDataURL(SVG))">PNG screenshot</li>
+                -->
+                <li title="Generate a vector image of the entire model." onclick="Actions.screenshot(Actions.toSVGDataURL(SVG))">SVG screenshot</li>
+                <li title="Generate an SVG representation of the model." onclick="Actions.generateSVG(SVG)">SVG code</li>
             </ul>
         </div>
 
@@ -7073,10 +7579,14 @@
                 <li title="The default 'schema' to use for new items."><input id="encapsulation" class="inputDefaults" type="text" onblur="Settings.setEncapsulation(this.value)"/> Capsule</li>
                 <li title="The default 'data type' to use for identity columns."><input id="defaultIdentity" class="inputDefaults" type="text" onblur="Settings.setDefaultIdentity(this.value)"/> Identity</li>
                 <li title="The suffix used for the columns that store identities."><input id="identitySuffix" class="inputDefaults" type="text" onblur="Settings.setIdentitySuffix(this.value)"/> Identity suffix</li>
+                <li title="The prefix used for the columns that enable deletion."><input id="deletablePrefix" class="inputDefaults" type="text" onblur="Settings.setDeletablePrefix(this.value)"/> Deletable prefix</li>
+                <li title="The suffix used for tables that contain deleted rows."><input id="deletionSuffix" class="inputDefaults" type="text" onblur="Settings.setDeletionSuffix(this.value)"/> Deletion suffix</li>
                 <li title="The smallest common time type of all those used in the model."><input id="defaultChronon" class="inputDefaults" type="text" onblur="Settings.setDefaultChronon(this.value)"/> Chronon</li>
                 <li title="How to get current, UTC or desired timestamping time from the database."><input id="defaultNow" class="inputDefaults" type="text" onblur="Settings.setDefaultNow(this.value)"/> Now</li>
                 <li id="metadataSettingsBeforeHere" title="Default for new items. Restatable items can store the exact same value for consecutive changing times. Unchecking this will introduce a constraint preventing restatements."><input id="restatability" class="inputDefaults" type="checkbox" onchange="Settings.setRestatability(this.checked ? 'true' : 'false')"/> Restatability</li>
                 <li title="Default for new items. Idempotent items discard any attempt to insert or update a value that is identical to the latest one stored with respect to changing time."><input id="idempotency" class="inputDefaults" type="checkbox" onchange="Settings.setIdempotency(this.checked ? 'true' : 'false')"/> Idempotency</li>
+                <li title="Default for new items. Deletable items get additional update trigger logic, such that an update to null with a later changing time then the existing latest value will move rows into a corresponding deletion table."><input id="deletability" class="inputDefaults" type="checkbox" onchange="Settings.setDeletability(this.checked ? 'true' : 'false')"/> Deletability</li>
+                <li title="Default for new items. Data may be encrypted at rest and this sets the default encryption group name for new items. A blank value indicates that no encryption should be used."><input id="encryptionGroup" class="inputDefaults" type="text" onblur="Settings.setEncryptionGroup(this.value)"/> Encryption group</li>
                 <li id="crtSettingsBeforeHere" title="Resets all settings in this menu to their default values." onclick="Settings.resetDefaults(true)">Reset defaults to their default values</li>
             </ul>
         </div>

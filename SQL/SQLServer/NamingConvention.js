@@ -58,12 +58,15 @@ while (anchor = schema.nextAnchor()) {
     while (attribute = anchor.nextAttribute()) {
         attribute.uniqueMnemonic = anchor.mnemonic + D + attribute.mnemonic;
         attribute.name = attribute.uniqueMnemonic + D + anchor.descriptor + D + attribute.descriptor;
+        attribute.deletionName = attribute.name + D + schema.metadata.deletionSuffix;
         attribute.businessName = attribute.descriptor;
         attribute.positName = attribute.name + D + schema.metadata.positSuffix;
         attribute.annexName = attribute.name + D + schema.metadata.annexSuffix;
         attribute.checksumColumnName = attribute.uniqueMnemonic + D + schema.metadata.checksumSuffix;
         attribute.identityColumnName = attribute.uniqueMnemonic + D + schema.metadata.identitySuffix;
         attribute.metadataColumnName = schema.metadata.metadataPrefix + D + attribute.uniqueMnemonic;
+        attribute.deletableColumnName = schema.metadata.deletablePrefix + D + attribute.uniqueMnemonic;
+        attribute.deletionTimeColumnName = attribute.uniqueMnemonic + D + schema.metadata.deletionSuffix;
         attribute.equivalentColumnName = attribute.uniqueMnemonic + D + schema.metadata.equivalentSuffix;
         attribute.versionColumnName = attribute.uniqueMnemonic + D + schema.metadata.versionSuffix;
         attribute.positingColumnName = attribute.uniqueMnemonic + D + schema.metadata.positingSuffix;
@@ -173,6 +176,7 @@ while (tie = schema.nextTie()) {
         }
     }
     tie.name = name;
+    tie.deletionName = tie.name + D + schema.metadata.deletionSuffix;
     tie.businessName = bName;
     tie.positName = tie.name + D + schema.metadata.positSuffix;
     tie.annexName = tie.name + D + schema.metadata.annexSuffix;
@@ -182,6 +186,8 @@ while (tie = schema.nextTie()) {
     tie.reliabilityColumnName = tie.name + D + schema.metadata.reliabilitySuffix;
     tie.assertionColumnName = tie.name + D + schema.metadata.assertionSuffix;
     tie.capsule = tie.metadata.capsule || schema.metadata.encapsulation;
+    tie.deletableColumnName = schema.metadata.deletablePrefix + D + tie.name;
+    tie.deletionTimeColumnName = tie.name + D + schema.metadata.deletionSuffix;
     tie.metadataColumnName = schema.metadata.metadataPrefix + D + tie.name;
     tie.versionColumnName = tie.name + D + schema.metadata.versionSuffix;
     tie.statementTypeColumnName = tie.name + D + schema.metadata.statementTypeSuffix;
@@ -206,5 +212,26 @@ if(schema.BUSINESS_VIEWS) {
                 "WARNING: The ties " + ties[businessName].join(' and ') +
                 " all have the same business name: " + businessName + "."
             );
+    }
+}
+
+// second pass over anchor to set key names
+while (anchor = schema.nextAnchor()) {
+    if(anchor.keys) {
+        var role, key, route, stop, component;
+        for(route in anchor.keys) {
+            key = anchor.keys[route];
+            key.name = 'key' + D + anchor.mnemonic + D + route;
+            for(stop in key.stops) {
+                component = key.stops[stop];
+                if(component.attribute) {
+                    component.routedValueColumnName = (role ? role.role + D : '') + component.attribute.valueColumnName;
+                    if(component.attribute.timeRange) {
+                        component.routedChangingColumnName = (role ? role.role + D : '') + component.attribute.changingColumnName;
+                    }
+                }
+                role = component.role;
+            }
+        }
     }
 }

@@ -66,8 +66,9 @@ BEGIN
 ~*/
             }
             else {
+                var dataRange = attribute.getEncryptionGroup() ? attribute.originalDataRange : attribute.dataRange;
 /*~
-        $attribute.valueColumnName $attribute.dataRange null$(anchor.hasMoreAttributes())?,
+        $attribute.valueColumnName $dataRange null$(anchor.hasMoreAttributes())?,
 ~*/
             }
         }
@@ -149,7 +150,18 @@ BEGIN
         $(schema.METADATA)? i.$attribute.metadataColumnName,
         i.$attribute.anchorReferenceName,
         $(attribute.timeRange)? i.$attribute.changingColumnName,
+~*/
+            if(attribute.getEncryptionGroup()) {
+/*~
+        ENCRYPTBYKEY(KEY_GUID('${attribute.getEncryptionGroup()}$'), cast(i.$attribute.valueColumnName as varbinary(max)))        
+~*/
+            }
+            else {
+/*~
         $(attribute.isKnotted())? ISNULL(i.$attribute.valueColumnName, [k$knot.mnemonic].$knot.identityColumnName) : i.$attribute.valueColumnName
+~*/
+            }
+/*~
     FROM
         @inserted i
 ~*/
@@ -258,7 +270,56 @@ BEGIN
         $(knot.isEquivalent())? AND
             $(knot.isEquivalent())? [k$knot.mnemonic].$knot.equivalentColumnName = i.$equivalent
         WHERE
-            CASE WHEN UPDATE($attribute.valueColumnName) THEN i.$attribute.valueColumnName ELSE [k$knot.mnemonic].$knot.identityColumnName END is not null
+            CASE WHEN UPDATE($attribute.valueColumnName) THEN i.$attribute.valueColumnName ELSE [k$knot.mnemonic].$knot.identityColumnName END is not null;
+~*/
+                if(attribute.isDeletable()) {
+                    var timeType = attribute.isHistorized() ? attribute.timeRange : schema.metadata.chronon;
+/*~
+        SELECT
+            $(attribute.isHistorized())? cast(CASE WHEN UPDATE($attribute.changingColumnName) THEN i.$attribute.changingColumnName ELSE @now END as $attribute.timeRange) as $attribute.deletionTimeColumnName,
+            i.$attribute.anchorReferenceName
+        INTO
+            #$attribute.uniqueMnemonic
+        FROM
+            inserted i
+        JOIN
+            deleted d
+        ON
+            d.$attribute.anchorReferenceName = i.$attribute.anchorReferenceName
+        AND
+            d.$attribute.valueColumnName is not null
+        WHERE
+            ((UPDATE($attribute.valueColumnName) AND i.$attribute.valueColumnName is null) OR (UPDATE($attribute.knotValueColumnName) AND i.$attribute.knotValueColumnName is null))
+        AND
+            i.$attribute.deletableColumnName = 1;
+
+        IF(@@ROWCOUNT > 0)
+        BEGIN
+            IF OBJECT_ID('[$attribute.capsule].[$attribute.deletionName]') is null
+            SELECT TOP 0 
+                *, 
+                CAST(null as $timeType) as $attribute.deletionTimeColumnName
+            INTO 
+                [$attribute.capsule].[$attribute.deletionName]
+            FROM 
+                [$attribute.capsule].[$attribute.name];
+
+            DELETE [$attribute.mnemonic]
+            OUTPUT
+                deleted.*,
+                $(attribute.isHistorized())? ISNULL(d.$attribute.deletionTimeColumnName, @now) : @now
+            INTO
+                [$attribute.capsule].[$attribute.deletionName]
+            FROM
+                [$attribute.capsule].[$attribute.name] [$attribute.mnemonic]
+            JOIN
+                #$attribute.uniqueMnemonic d
+            ON
+                d.$attribute.anchorReferenceName = [$attribute.mnemonic].$attribute.anchorReferenceName
+        END
+~*/
+                } // end of deletable
+/*~
     END
 ~*/
             }
@@ -302,12 +363,70 @@ BEGIN
             END, @now) as $attribute.timeRange),
 ~*/
                 }
+                if(attribute.getEncryptionGroup()) {
+/*~
+        ENCRYPTBYKEY(KEY_GUID('${attribute.getEncryptionGroup()}$'), cast(i.$attribute.valueColumnName as varbinary(max)))        
+~*/
+                }
+                else {
 /*~
             i.$attribute.valueColumnName
+~*/
+                }
+/*~
         FROM
             inserted i
         WHERE
             i.$attribute.valueColumnName is not null;
+~*/
+                if(attribute.isDeletable()) {
+                    var timeType = attribute.isHistorized() ? attribute.timeRange : schema.metadata.chronon;
+/*~
+        SELECT
+            $(attribute.isHistorized())? cast(CASE WHEN UPDATE($attribute.changingColumnName) THEN i.$attribute.changingColumnName ELSE @now END as $attribute.timeRange) as $attribute.deletionTimeColumnName,
+            i.$attribute.anchorReferenceName
+        INTO
+            #$attribute.uniqueMnemonic
+        FROM
+            inserted i
+        JOIN
+            deleted d
+        ON
+            d.$attribute.anchorReferenceName = i.$attribute.anchorReferenceName
+        AND
+            d.$attribute.valueColumnName is not null
+        WHERE
+            i.$attribute.valueColumnName is null
+        AND
+            i.$attribute.deletableColumnName = 1;
+
+        IF(@@ROWCOUNT > 0)
+        BEGIN
+            IF OBJECT_ID('[$attribute.capsule].[$attribute.deletionName]') is null
+            SELECT TOP 0 
+                *, 
+                CAST(null as $timeType) as $attribute.deletionTimeColumnName
+            INTO 
+                [$attribute.capsule].[$attribute.deletionName]
+            FROM 
+                [$attribute.capsule].[$attribute.name];
+
+            DELETE [$attribute.mnemonic]
+            OUTPUT
+                deleted.*,
+                $(attribute.isHistorized())? ISNULL(d.$attribute.deletionTimeColumnName, @now) : @now
+            INTO
+                [$attribute.capsule].[$attribute.deletionName]
+            FROM
+                [$attribute.capsule].[$attribute.name] [$attribute.mnemonic]
+            JOIN
+                #$attribute.uniqueMnemonic d
+            ON
+                d.$attribute.anchorReferenceName = [$attribute.mnemonic].$attribute.anchorReferenceName
+        END
+~*/
+                } // end of deletable
+/*~
     END
 ~*/
             } // end of not knotted
